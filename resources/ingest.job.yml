@@ -1,0 +1,86 @@
+# Pulls from the outside world into Bronze. Six independent tasks, run in
+# parallel: no depends_on between them, so one flaky API can't block the rest.
+# Raw responses land append-only — Bronze is the undo button for re-parsing.
+resources:
+  jobs:
+    ingest:
+      name: account_signals_ingest
+
+      environments:
+        - environment_key: ingest_env
+          spec:
+            client: "4"
+            dependencies:
+              - requests
+              - feedparser
+
+      parameters:
+        - name: catalog
+          default: ${var.catalog}
+        - name: schema
+          default: ${var.schema}
+        # SEC fair-access policy requires a contact address in the User-Agent;
+        # requests without one are throttled or blocked.
+        - name: sec_contact
+          default: ${var.sec_contact}
+        # Which call to pull. NVDA FY2027 Q2 ended 2026-07-26.
+        - name: fiscal_year
+          default: "2027"
+        - name: fiscal_quarter
+          default: "2"
+
+      tasks:
+        - task_key: edgar_xbrl
+          environment_key: ingest_env
+          spark_python_task:
+            python_file: ../src/ingest/edgar.py
+            parameters:
+              - "{{job.parameters.catalog}}"
+              - "{{job.parameters.schema}}"
+              - "{{job.parameters.sec_contact}}"
+
+        - task_key: transcripts
+          environment_key: ingest_env
+          spark_python_task:
+            python_file: ../src/ingest/transcripts.py
+            parameters:
+              - "{{job.parameters.catalog}}"
+              - "{{job.parameters.schema}}"
+              - "{{job.parameters.fiscal_year}}"
+              - "{{job.parameters.fiscal_quarter}}"
+
+        - task_key: news
+          environment_key: ingest_env
+          spark_python_task:
+            python_file: ../src/ingest/news.py
+            parameters:
+              - "{{job.parameters.catalog}}"
+              - "{{job.parameters.schema}}"
+
+        - task_key: analyst_ratings
+          environment_key: ingest_env
+          spark_python_task:
+            python_file: ../src/ingest/ratings.py
+            parameters:
+              - "{{job.parameters.catalog}}"
+              - "{{job.parameters.schema}}"
+
+        - task_key: industry_trends
+          environment_key: ingest_env
+          spark_python_task:
+            python_file: ../src/ingest/trends.py
+            parameters:
+              - "{{job.parameters.catalog}}"
+              - "{{job.parameters.schema}}"
+
+        - task_key: macro
+          environment_key: ingest_env
+          spark_python_task:
+            python_file: ../src/ingest/macro.py
+            parameters:
+              - "{{job.parameters.catalog}}"
+              - "{{job.parameters.schema}}"
+
+      schedule:
+        quartz_cron_expression: '0 0 5 * * ?'
+        timezone_id: America/New_York

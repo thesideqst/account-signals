@@ -1,0 +1,70 @@
+<!doctype html>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>account_signals</title>
+<style>
+  :root{--bg:#0e1317;--card:#161d22;--ink:#e4eaee;--soft:#93a2ac;--line:#2a343b;--accent:#46c6ce}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+       font:15px/1.6 ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif}
+  main{max-width:760px;margin:0 auto;padding:48px 24px 80px}
+  h1{font-size:15px;letter-spacing:.16em;text-transform:uppercase;color:var(--soft);
+     font-weight:600;margin:0 0 32px}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:10px;
+        padding:24px;margin-bottom:20px}
+  .meta{display:flex;flex-wrap:wrap;gap:6px 20px;font-size:12.5px;color:var(--soft);
+        margin-bottom:18px;font-variant-numeric:tabular-nums}
+  .meta b{color:var(--ink);font-weight:600}
+  .pill{display:inline-block;background:#0f2a2d;color:var(--accent);border-radius:4px;
+        padding:2px 8px;font-size:11.5px;font-weight:700;letter-spacing:.06em}
+  h2{font-size:26px;line-height:1.15;margin:0 0 6px;letter-spacing:-.02em}
+  .sub{color:var(--soft);margin:0 0 20px;font-size:13.5px}
+  audio{width:100%;margin-top:4px}
+  details{border-top:1px solid var(--line);margin-top:22px;padding-top:16px}
+  summary{cursor:pointer;color:var(--soft);font-size:13px}
+  summary:hover{color:var(--ink)}
+  #script{margin-top:16px;white-space:pre-wrap;color:#c8d3da;font-size:14.5px}
+  .err{color:#f0a38a}
+  select{background:var(--card);color:var(--ink);border:1px solid var(--line);
+         border-radius:6px;padding:7px 10px;font-size:14px}
+</style>
+
+<main>
+  <h1>account_signals</h1>
+  <div id="app" class="card">Loading…</div>
+</main>
+
+<script>
+const $ = (s) => document.querySelector(s);
+
+async function load() {
+  const app = $("#app");
+  try {
+    // A failed fetch returns an error object, not an array. Without this the
+    // page silently showed "No briefings yet" for a server-side crash.
+    const res = await fetch("/api/accounts");
+    const accounts = await res.json();
+    if (!res.ok) throw new Error(accounts.detail || res.statusText);
+    if (!accounts.length) { app.textContent = "No briefings yet."; return; }
+    const acct = accounts[0].account_id;
+    const b = await (await fetch(`/api/briefing/${acct}`)).json();
+
+    const minutes = (b.word_count / 153).toFixed(1);   // measured against the player's own duration
+    app.innerHTML = `
+      <div class="meta">
+        <span class="pill">${b.mode_label || b.mode}</span>
+        <span><b>${b.account_id}</b></span>
+        <span>quarter ending <b>${b.period_end}</b></span>
+        <span><b>${b.word_count}</b> words · ~${minutes} min</span>
+      </div>
+      <h2>${b.episode_title || "Today's briefing"}</h2>
+      <p class="sub">${b.mode_reason || ""}</p>
+      <audio controls preload="none" src="/api/audio/${acct}"></audio>
+      <details><summary>Read the transcript</summary><div id="script"></div></details>`;
+    $("#script").textContent = b.script_text;
+  } catch (e) {
+    app.innerHTML = `<span class="err">Could not load: ${e}</span>`;
+  }
+}
+load();
+</script>

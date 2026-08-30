@@ -1,0 +1,56 @@
+# account_signals — daily audio briefing per strategic account.
+# See ARCHITECTURE.md for the design rationale behind this layout.
+
+bundle:
+  name: account_signals
+
+include:
+  - resources/*.yml
+
+variables:
+  catalog:
+    description: Unity Catalog catalog for all layers.
+    default: workspace
+  schema:
+    description: Schema holding bronze/silver/gold tables.
+    default: account_signals_dev
+  warehouse_id:
+    description: SQL warehouse used by the app and ad-hoc queries.
+    default: c183f02d121f496a
+  llm_endpoint:
+    description: Foundation model endpoint for synthesis and grading.
+    default: databricks-gpt-oss-120b
+  embedding_endpoint:
+    description: Embedding model for chunking unstructured sources.
+    default: databricks-gte-large-en
+  vector_search_endpoint:
+    description: Vector Search endpoint backing retrieval.
+    default: account-signals-vs
+  sec_contact:
+    description: >-
+      Contact address sent in the User-Agent to SEC EDGAR. Their fair-access
+      policy requires one; requests without it are throttled or blocked.
+      Set this to your own address before running the ingest.
+    default: your-email@example.com
+  lakebase_project:
+    description: Lakebase Autoscaling project serving the app.
+    default: account-signals-dev
+
+targets:
+  dev:
+    default: true
+    mode: development
+    workspace:
+      profile: DEFAULT
+    variables:
+      schema: account_signals_dev
+
+  prod:
+    mode: production
+    workspace:
+      profile: DEFAULT
+      # Production mode requires an explicit root_path so exactly one copy
+      # of the bundle is ever deployed, no matter who runs the deploy.
+      root_path: /Workspace/Users/${workspace.current_user.userName}/.bundle/${bundle.name}/${bundle.target}
+    variables:
+      schema: account_signals_prod

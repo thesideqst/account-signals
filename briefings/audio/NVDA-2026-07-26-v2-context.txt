@@ -1,0 +1,77 @@
+NVDA - fiscal 2027 Q2 briefing
+NVDA-2026-07-26-20260830T164830
+generated 2026-08-30T16:48:30.786Z
+821 words | narrated by gpt-4o-mini-tts, voice alloy | 4.5 min
+============================================================================
+
+Revenue surged to $96.2 billion, up 17.9 percent quarter‑over‑quarter and more than double
+year‑over‑year. The year‑over‑year growth rate itself jumped 20.6 percentage points from the
+prior quarter, meaning the pace of revenue expansion is accelerating. Management framed that
+surge as the fourth straight quarter of accelerating growth, driven by a global AI
+infrastructure build‑out and an expanding mix of hyperscalers, AI labs, enterprises and
+sovereign customers. They also warned that the outlook is supply‑constrained and that they
+expect to grow roughly 70 percent in fiscal 2028, but only if they can close the
+supply‑demand gap.
+
+Here’s why that matters. The revenue lift comes from data‑center sales that climbed to
+$89 billion, with hyperscale revenue at $49 billion and ACIE at $40 billion. Colette Kress
+highlighted strong contributions from both hyperscale and the ACIE segment, noting that
+NeoCloud capacity additions are fueling a 25 percent sequential rise in ACIE. The
+acceleration signal tells us the market is still hungry for compute, but the supply
+constraints Jensen Huang emphasized—“we have supply for 70 percent, demand is much
+higher”—suggest the next quarter could see a slowdown if capacity can’t keep up. The
+takeaway for the account is that the customer is likely prioritizing securing GPU capacity
+now, before the pipeline tightens.
+
+Gross margin sat at 75.0 percent of revenue, expanding by four basis points
+quarter‑over‑quarter and by 156 basis points year‑over‑year. The expansion reflects that
+cost of revenue grew slower than revenue by 19.0 percentage points year‑over‑year, widening
+the margin envelope. Kress said GAAP and non‑GAAP gross margins were “largely unchanged from
+last quarter” because the product mix stayed similar. Yet just minutes later she warned that
+memory pricing pressure would push GAAP and non‑GAAP gross margins down to about 74 percent
+in the next quarter, then into the low‑70s range later in the year. The contrast between the
+current modest expansion and the forward‑looking compression is a clear signal: the company
+is still extracting margin benefit from the revenue surge, but it expects cost pressures to
+erode that cushion. For the sales rep, the focus should be on how the customer’s workload
+mix can mitigate memory‑related cost spikes—perhaps by shifting more to Vera Rubin or
+leveraging the newer NVLink‑72 architecture, which the executives tout as “30 times higher
+throughput per megawatt” and a way to stretch every watt of power.
+
+Net income rose to $59.7 billion, up 2.3 percent quarter‑over‑quarter and 125.9 percent
+year‑over‑year. Operating income climbed to $63.7 billion, up 19.0 percent
+quarter‑over‑quarter and 124.1 percent year‑over‑year. Net income grew faster than operating
+income by 1.8 percentage points year‑over‑year, pointing to something below the operating
+line helping the bottom line. Kress noted a non‑GAAP effective tax rate of 16 percent, up
+from a year ago because of higher revenue, and she also highlighted a record $26 billion
+returned to shareholders. Huang didn’t directly address the net‑vs‑operating gap, but his
+emphasis on “extraordinary demand” and “the AI life cycle getting way more complex” implies
+that the company is capturing more value from the token economy and from high‑margin
+services. The signal here is that profitability remains robust despite upcoming margin
+pressure, but the company is already allocating a larger share of cash to shareholders and
+strategic investments. For the account, the key question is whether the customer’s cost
+structure will benefit from the same “below‑the‑line” levers—tax efficiencies,
+share‑repurchase benefits, or perhaps the revenue‑sharing model Kress described for NeoCloud
+partners.
+
+In a nutshell, the numbers tell three intersecting stories. Revenue is accelerating, but
+supply constraints loom. Gross margin is still expanding, yet memory cost headwinds are set
+to compress it later this year. Net income is outpacing operating income, sowing that the
+firm is extracting extra upside now, even as it prepares to return more cash and invest in
+new product ramps. Management’s narrative leans heavily on the growth story and the
+supply‑constrained outlook, while the data quietly flags margin pressure and the importance
+of the below‑the‑line profit drivers.
+
+Now, how can you turn those signals into a conversation with the account? First, ask how the
+customer is planning to secure GPU capacity for the next twelve months, and whether they
+have evaluated the revenue‑sharing model that NVIDIA is rolling out with NeoCloud partners.
+Second, probe whether the customer’s workloads are sensitive to memory pricing, and if so,
+whether they have considered moving workloads to Vera Rubin or leveraging the
+higher‑throughput NVLink‑72 platform to stretch each gigawatt of power. Those questions hit
+the two biggest levers the data revealed: capacity scarcity and margin‑preserving
+architecture choices.
+
+Finally, leave the account thinking about the one thing that could derail the upside: “If
+the supply chain can’t keep pace with the demand you’re seeing, how will that affect your
+roadmap for AI‑driven products this year?” That question keeps the conversation anchored on
+the core tension between accelerating revenue and tightening supply, and it gives you a
+clear opening to position NVIDIA’s upcoming capacity commitments as a solution.

@@ -1,0 +1,48 @@
+# Brings recaps back from Lakebase into UC, then grades each against the brief
+# it was recalling and writes the gaps that the next briefing run calls back to.
+#
+# The sync task is an INTERIM stand-in for Lakebase CDF, which is blocked by
+# Free Edition's default-storage catalog. Sync and grade live in one job so
+# grading can never run against stale recaps. See src/sync/read_recaps.py.
+resources:
+  jobs:
+    grading:
+      name: account_signals_grading
+
+      environments:
+        - environment_key: grading_env
+          spec:
+            client: "4"
+            dependencies:
+              - mlflow
+              - databricks-sdk
+
+      parameters:
+        - name: catalog
+          default: ${var.catalog}
+        - name: schema
+          default: ${var.schema}
+        - name: llm_endpoint
+          default: ${var.llm_endpoint}
+
+      tasks:
+        # Interim: replaced by Lakebase CDF in phase 2, at which point this
+        # task is deleted and the recall_recaps_current view is repointed.
+        - task_key: sync_recaps
+          environment_key: grading_env
+          spark_python_task:
+            python_file: ../src/sync/read_recaps.py
+            parameters:
+              - "{{job.parameters.catalog}}"
+              - "{{job.parameters.schema}}"
+
+        - task_key: grade_recaps
+          depends_on:
+            - task_key: sync_recaps
+          environment_key: grading_env
+          spark_python_task:
+            python_file: ../src/grading/grade.py
+            parameters:
+              - "{{job.parameters.catalog}}"
+              - "{{job.parameters.schema}}"
+              - "{{job.parameters.llm_endpoint}}"

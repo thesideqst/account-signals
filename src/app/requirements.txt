@@ -1,0 +1,9 @@
+fastapi
+uvicorn[standard]
+# The Apps runtime ships an older SDK without WorkspaceClient.postgres,
+# which fails at runtime with AttributeError. Pin the version verified
+# to have it.
+databricks-sdk>=0.102.0
+psycopg[binary]
+python-multipart
+requests

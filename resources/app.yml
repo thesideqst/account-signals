@@ -1,0 +1,18 @@
+# Audio-first briefing app. Reads from Lakebase (millisecond lookups),
+# not from Delta (built for scans, not single-row fetches).
+# Env vars live in ../src/app/app.yaml, not here.
+resources:
+  apps:
+    briefing_app:
+      name: account-signals-${bundle.target}
+      description: Daily audio briefing and spoken recall for strategic accounts.
+      source_code_path: ../src/app
+      resources:
+        # Attaching the Lakebase project makes Databricks inject
+        # PGHOST/PGUSER/PGPASSWORD at runtime, so the app never holds a
+        # connection string and authenticates as its own service principal.
+        - name: postgres
+          database:
+            instance_name: account-signals-dev
+            database_name: databricks_postgres
+            permission: CAN_CONNECT_AND_CREATE

@@ -1,0 +1,106 @@
+NVDA - fiscal 2027 Q2 briefing
+NVDA-2026-07-26-20260830T174053
+generated 2026-08-30T17:40:53.871Z
+1171 words | narrated by gpt-4o-mini-tts, voice alloy | 4.5 min
+============================================================================
+
+Revenue surged to $96.2 billion, up 17.9 percent from the prior quarter and more than double
+the year‑ago level, a 105.9 percent jump. That top‑line explosion is the engine of
+everything else we’ll talk about. The company says the surge is driven by a fourth straight
+quarter of accelerating AI demand, a global infrastructure build‑out, and the rollout of the
+new Vera Rubin platform. The numbers back that story: revenue growth is accelerating, the
+year‑over‑year growth rate is 20.6 percentage points higher than it was last quarter. In
+plain terms, the pace at which customers are adding compute is not just steady—it’s picking
+up speed.
+
+Why does that matter? When revenue climbs faster than the cost of building the product,
+margins expand. Cost of revenue rose to $24.1 billion, a 17.7 percent quarter‑over‑quarter
+increase and an 86.8 percent rise year‑over‑year. That growth is 19.0 percentage points
+slower than revenue on a year‑over‑year basis, which directly widens the profit cushion.
+Gross profit hit $72.1 billion, and gross margin—defined as the share of each sales dollar
+left after the cost of building the thing—sat at 75.0 percent of revenue. The margin
+expanded by four basis points (a basis point is one‑hundredth of a percent) versus the last
+quarter and by 156 basis points versus a year ago. Operating income rose to $63.7 billion, a
+19.0 percent quarter‑over‑quarter gain, and operating margin—operating income as a share of
+revenue—stood at 66.2 percent, expanding by 64 basis points quarter‑over‑quarter. Net income
+reached $59.7 billion, up 2.3 percent sequentially and 125.9 percent year‑over‑year. The key
+insight is that net income grew faster than operating income by 1.8 percentage points
+year‑over‑year, a signal that something below the operating line—likely the share of revenue
+from AI labs and other strategic investments—is adding to the bottom line.
+
+Management framed the results as “another outstanding quarter with record revenue, operating
+income and EPS.” Colette Kress highlighted that data‑center revenue hit $89 billion, with
+hyperscale contributing $49 billion and the ACIE segment—enterprise, sovereign and NeoCloud
+customers—delivering $40 billion, a 25 percent sequential rise and a 138 percent
+year‑over‑year jump. She also pointed to an expanding partnership with AWS that will deploy
+an additional two million GPUs through fiscal ’29. The narrative is clear: the company is
+betting on a supply‑constrained but high‑margin growth story, leveraging new architectures
+like Vera Rubin and the broader AI factory platform to capture more of the data‑center TAM.
+
+Where the numbers and the messaging intersect is in the margin story. The 4‑basis‑point
+gross‑margin lift quarter‑over‑quarter is modest, yet it confirms that the cost‑of‑revenue
+slowdown is translating into real profitability. Management acknowledges that component
+costs, especially memory, are under pressure, and they have reset expectations for Q3 gross
+margin to 74 percent, plus or minus 50 basis points. The guidance suggests a slight dip
+before a rebound to the low‑70s range in fiscal ’28 as price increases take effect. The fact
+that net income outpaced operating income tells us that the company’s strategic
+investments—like the $50 billion put into Frontier AI labs and the $500 billion
+capital‑raising partnerships—are already feeding back into earnings, even though those
+projects are still early‑stage.
+
+The macro backdrop reinforces the upside. Private nonresidential fixed investment, a proxy
+for capital spending on infrastructure, rose by $132.84 million in the latest quarter,
+indicating that enterprises and sovereigns are still willing to pour money into data‑center
+build‑outs despite tighter financing. At the same time, the 10‑year Treasury yield climbed
+to 4.67 percent, up 22 basis points, raising the cost of long‑term financing for large‑scale
+projects. The combination of rising investment appetite and higher financing costs creates a
+race: customers who secure supply now lock in lower financing rates, while those who wait
+may face higher capital costs. NVIDIA’s narrative that supply is constrained but growing
+aligns with this dynamic—its ability to promise “70 percent” year‑over‑year revenue growth
+while acknowledging a bottleneck positions it as a partner that can help customers navigate
+the financing squeeze.
+
+Another macro thread is the modest decline in the 10‑year minus 2‑year Treasury spread, now
+0.39 percent, down 8 basis points. A narrower spread often signals that investors see less
+risk premium in longer‑term debt, which can make large infrastructure loans more attractive.
+For an account that is planning multi‑gigawatt AI factories, that environment can be a
+catalyst for locking in financing now rather than later.
+
+Putting this together, the picture for the account you cover is one of accelerating demand,
+modest but real margin expansion, and strategic investments that are already boosting net
+earnings. The company is explicitly betting on its full‑stack AI factory platform to capture
+a larger slice of the data‑center market, especially in the ACIE segment that now represents
+roughly half of its data‑center revenue and is growing at 100 percent year‑over‑year,
+according to Huang’s remarks. The supply‑constrained outlook is not a warning sign but a
+strategic lever: by controlling the pipeline of Vera Rubin and Vera CPU shipments, NVIDIA
+can command premium pricing and protect margins even as component costs rise.
+
+Now, what does that mean for your conversation with the CEO of the account? First, you can
+ask how the organization is aligning its capital‑allocation strategy with the accelerating
+AI‑compute demand that NVIDIA is describing. The fact that private nonresidential fixed
+investment is rising and that NVIDIA’s net income is being bolstered by below‑the‑line
+contributions gives you credibility to discuss the trade‑off between securing supply now
+versus waiting for potentially higher financing costs later. Second, you can probe the
+company’s view on the emerging revenue‑sharing model that NVIDIA is rolling out with
+NeoCloud partners. Kress explained that NVIDIA takes a take‑or‑pay commitment on a portion
+of capacity and then shares in the rental revenue above that floor, effectively turning a
+one‑time hardware sale into a recurring revenue stream. Asking how the account evaluates
+that model—whether it sees it as a way to de‑risk capex or as a lever to improve cash‑flow
+predictability—directly ties into the margin expansion and the
+net‑income‑faster‑than‑operating‑income signal.
+
+Finally, leave the CEO with a forward‑looking question that forces a strategic pause: given
+that NVIDIA’s revenue growth is accelerating faster than the prior quarter and that the
+company expects supply to remain a bottleneck through fiscal ’28, what contingency plans
+does your organization have if the supply gap widens faster than anticipated? The answer
+will surface whether the account is positioned to double‑down on early procurement,
+diversify its compute vendors, or perhaps accelerate its own internal AI‑infrastructure
+build‑out.
+
+All of this hinges on the same three data points you just heard: revenue up 17.9 percent
+quarter‑over‑quarter, gross margin expanding by four basis points, and net income outpacing
+operating income by 1.8 percentage points. Those numbers tell you that demand is not just
+strong—it’s getting stronger, that the cost side is holding together, and that strategic
+investments are already paying off. Use that insight to steer the conversation from “how
+much do we need” to “how do we lock in the right supply, financing, and partnership
+structure to capture the upside while protecting the downside.”

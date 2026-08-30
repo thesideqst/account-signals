@@ -1,0 +1,8 @@
+.databricks/
+__pycache__/
+*.pyc
+.env
+.DS_Store
+
+# Generated episodes: audio is large and regenerates from the pipeline.
+briefings/audio/*.mp3

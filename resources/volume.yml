@@ -1,0 +1,9 @@
+# Audio briefings are files, not rows — so they live in a UC Volume,
+# and Gold stores only the path to them.
+resources:
+  volumes:
+    audio:
+      catalog_name: ${var.catalog}
+      schema_name: ${var.schema}
+      name: audio
+      volume_type: MANAGED

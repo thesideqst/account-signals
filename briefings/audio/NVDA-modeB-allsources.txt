@@ -1,0 +1,107 @@
+NVDA - fiscal 2027 Q2 briefing
+NVDA-2026-07-26-20260830T175838
+generated 2026-08-30T17:58:38.839Z
+1190 words | narrated by gpt-4o-mini-tts, voice alloy | 4.5 min
+============================================================================
+
+NVIDIA just delivered a record quarter, but the real tension lies in how the company is
+stretching its margins while the AI engine is revving faster than ever. The focus today is
+on the mechanics behind that stretch and what it means for the account you cover.
+
+Revenue hit $96.2 billion, up 17.9 percent quarter‑over‑quarter and up 105.9 percent
+year‑over‑year. Cost of revenue rose to $24.1 billion, a 17.7 percent quarter‑over‑quarter
+increase and an 86.8 percent jump year‑over‑year. That cost growth is 19.0 percentage points
+slower than revenue growth on a year‑over‑year basis, which is why the gross margin – the
+share of each sales dollar left after the cost of building the thing – sits at 75.0 percent
+of revenue. Gross margin expanded by 4 basis points versus last quarter and by 156 basis
+points versus a year ago. A basis point is one‑hundredth of a percent, so those moves are
+tiny but meaningful when you’re talking billions.
+
+Operating income climbed to $63.7 billion, a 19.0 percent quarter‑over‑quarter rise and a
+124.1 percent year‑over‑year surge. Operating margin, the share of each dollar left after
+all operating expenses, is 66.2 percent of revenue and expanded by 64 basis points versus
+last quarter. Net income reached $59.7 billion, up 2.3 percent quarter‑over‑quarter and
+125.9 percent year‑over‑year. Net margin, the final profit share, is 62.0 percent of
+revenue. Notably, net income grew faster than operating income by 1.8 percentage points
+year‑over‑year, a signal that something below the operating line – perhaps tax benefits or
+other non‑operating items – is adding to the bottom line.
+
+Let me break that down. The AI surge is pushing data‑center revenue higher, and that revenue
+is the engine that lifts the whole P&L. When revenue climbs faster than the cost of building
+the chips, the gap widens, and that gap shows up as higher gross profit. Because cost of
+revenue grew slower than revenue by 19.0 percentage points year‑over‑year, each dollar of
+sales now leaves a bigger slice for the company. That slice then feeds operating income,
+which also rose sharply, and finally net income, which outpaced operating income by a small
+but telling margin. The numbers you just heard – $96.2 billion in sales, $72.1 billion in
+gross profit, $63.7 billion in operating income, $59.7 billion in net income – are the
+concrete expression of that margin stretch.
+
+Management framed the story in terms of demand acceleration. Colette Kress said the surge in
+AI demand is driving a global infrastructure build‑out, with hyperscalers, AI labs, AI
+natives, enterprises and sovereign customers all adding capacity. She highlighted that
+data‑center revenue grew for the fourth straight quarter and that the company expects
+roughly 70 percent revenue growth in fiscal 2028, but that outlook is supply‑constrained.
+The new Vera Rubin platform, she explained, delivers 30 times higher throughput per megawatt
+and 35 times lower token cost than the previous generation, and it will account for about
+20 percent of data‑center revenue in the upcoming quarter. That product ramp is a key lever
+behind the accelerating revenue growth – the year‑over‑year growth rate is 20.6 percentage
+points higher than it was last quarter – and also behind the margin expansion, because the
+higher‑efficiency hardware lets NVIDIA sell more compute for the same power budget.
+
+Jensen Huang added that the AI life cycle is getting more complex, moving from data
+preparation through training to agentic inference. He described the NVLink‑72 rack‑scale
+architecture as the core engine that lets customers run every model type on a single
+fungible system. That fungibility means customers can shift workloads without buying new
+chips, reinforcing the margin expansion because the same hardware can be reused across
+phases, spreading cost over more revenue. Huang also noted that each gigawatt of data‑center
+capacity now represents roughly $40 billion of revenue opportunity, up from $25 billion with
+the previous generation. That jump in revenue per gigawatt is another reason why the top
+line is accelerating faster than the cost side.
+
+The financial impact of these dynamics is already visible in the reported numbers. Gross
+margin expanded, operating margin expanded, and net margin stayed strong. However, the
+guidance for the next quarter hints at a slight dip: GAAP and non‑GAAP gross margins are
+expected to be 74 percent, plus or minus 0.5 percentage points, because memory pricing
+pressure is rising. That pressure is a symptom of the same AI demand surge, not an
+independent cost shock, and it underscores why the company is flagging a supply‑constrained
+outlook.
+
+Now let’s step back and look at the broader environment. The consumer price index rose to
+332.81 in early July, up 0.41 points from three months earlier, indicating inflation is
+still climbing. The 10‑year Treasury yield moved up to 4.67 percent, 0.22 points higher than
+three weeks ago, while the federal funds effective rate slipped to 3.63 percent, down 0.01
+points. Private non‑residential fixed investment rose to 4,623.36, up 132.84 points from the
+previous quarter, and the 10‑year minus 2‑year Treasury spread fell to 0.39, down 0.08
+points. Higher inflation and yields make financing data‑center builds more expensive, but
+the rise in private fixed investment shows that capital spend on infrastructure is still
+robust. The narrowing spread signals tighter credit conditions, which aligns with NVIDIA’s
+comment that supply constraints are a real bottleneck – capital markets are willing to fund
+the builds, but the physical supply chain is the limiting factor.
+
+Industry coverage reinforces that narrative. A recent playbook on AI emphasizes that scale
+is where value lives and that strong foundations enable that scale. NVIDIA’s
+supply‑constrained outlook and its push to accelerate Vera Rubin production are exactly the
+kind of foundation‑building the playbook describes. In other words, the company is trying to
+widen the pipe that delivers compute, and the margin expansion we see is the early return on
+that widened pipe.
+
+What does this mean for your conversation with the account’s leadership? First, the fact
+that costs grew slower than revenue by 19 percentage points year‑over‑year gives you a solid
+footing to ask how they plan to deploy the extra margin. You could say, “With cost growth
+lagging revenue by 19 percentage points, the margin cushion is expanding – are you looking
+to reinvest that cushion into additional capacity, accelerate pricing, or boost shareholder
+returns?” The numbers Kress quoted about cost‑of‑revenue versus revenue growth give you
+credibility to raise that question.
+
+Second, the acceleration in revenue growth – a 20.6 percentage‑point jump in the
+year‑over‑year growth rate versus last quarter – combined with the supply‑constrained
+outlook creates a tension point. You might ask, “Revenue growth is accelerating while you
+flag supply constraints – what steps are you taking to unlock more supply or prioritize
+high‑margin customers in the next quarter?” The management comments about Vera Rubin’s ramp
+and the explicit supply‑constrained guidance provide the context that makes this question
+land.
+
+Finally, keep the conversation open with a forward‑looking challenge: “If the memory pricing
+pressure you flagged for the next quarter tightens further, what could disrupt your ability
+to sustain the current acceleration in margins and growth?” That leaves the rep with a
+single, vivid risk to monitor as the quarter unfolds.

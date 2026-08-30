@@ -1,0 +1,71 @@
+# Silver -> Gold. Retrieve, write, narrate.
+# Sequential on purpose: each step consumes the previous one's output.
+resources:
+  jobs:
+    briefing:
+      name: account_signals_briefing
+
+      environments:
+        - environment_key: briefing_env
+          spec:
+            client: "4"
+            dependencies:
+              - databricks-vectorsearch
+              - mlflow
+              - requests
+              # tts.py re-grants the app's Postgres read access after syncing
+              - psycopg[binary]
+              - databricks-sdk
+
+      parameters:
+        - name: catalog
+          default: ${var.catalog}
+        - name: schema
+          default: ${var.schema}
+        - name: llm_endpoint
+          default: ${var.llm_endpoint}
+        - name: vector_search_endpoint
+          default: ${var.vector_search_endpoint}
+        # Narration pace. 1.0 measures at ~153 words per minute against the
+        # player's own duration, which is normal narration. An earlier 0.8 was
+        # set to correct a wpm figure that turned out to be a bad bitrate read.
+        - name: tts_speed
+          default: "1.0"
+
+      tasks:
+        # Pull the structured deltas + the most relevant prose chunks per account.
+        # Retrieval keeps the prompt small and the claims traceable.
+        - task_key: retrieve
+          environment_key: briefing_env
+          spark_python_task:
+            python_file: ../src/briefing/retrieve.py
+
+        # Compose the ~10-min script. Reads yesterday's grading gaps as of the
+        # previous run, which is what keeps the callback loop acyclic.
+        - task_key: synthesize
+          depends_on:
+            - task_key: retrieve
+          environment_key: briefing_env
+          spark_python_task:
+            python_file: ../src/briefing/synthesize.py
+            source: WORKSPACE
+            parameters:
+              - "{{job.parameters.catalog}}"
+              - "{{job.parameters.schema}}"
+              - "{{job.parameters.llm_endpoint}}"
+
+        # External TTS API -> MP3 into the UC Volume. Gold keeps the path.
+        - task_key: narrate
+          depends_on:
+            - task_key: synthesize
+          environment_key: briefing_env
+          spark_python_task:
+            python_file: ../src/briefing/tts.py
+            parameters:
+              - "{{job.parameters.catalog}}"
+              - "{{job.parameters.schema}}"
+              - "{{job.parameters.tts_speed}}"
+
+      schedule:
+        quartz_cron_expression: '0 30 5 * * ?'
+        timezone_id: America/New_York

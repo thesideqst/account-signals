@@ -1,0 +1,32 @@
+# Bronze -> Silver. Declarative because the dependencies are knowable:
+# given these tables, derive those. The pipeline works out the order and
+# handles incremental updates. External API calls deliberately live in
+# ingest.job.yml instead, where retries and auth are easier to control.
+resources:
+  pipelines:
+    signals:
+      name: account_signals_pipeline
+      serverless: true
+      catalog: ${var.catalog}
+      schema: ${var.schema}
+      libraries:
+        - file:
+            path: ../src/pipelines/xbrl_facts.py
+        - file:
+            path: ../src/pipelines/xbrl_metrics.py
+        - file:
+            path: ../src/pipelines/rating_changes.py
+        - file:
+            path: ../src/pipelines/transcript_turns.py
+        - file:
+            path: ../src/pipelines/metric_context.py
+        - file:
+            path: ../src/pipelines/macro_context.py
+        - file:
+            path: ../src/pipelines/daily_signals.py
+        - file:
+            path: ../src/pipelines/chunk_and_embed.py
+      configuration:
+        catalog: ${var.catalog}
+        schema: ${var.schema}
+        embedding_endpoint: ${var.embedding_endpoint}
