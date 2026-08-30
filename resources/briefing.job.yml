@@ -31,6 +31,10 @@ resources:
         # set to correct a wpm figure that turned out to be a bad bitrate read.
         - name: tts_speed
           default: "1.0"
+        # Created by `databricks postgres create-synced-table`; differs per
+        # workspace. Leave blank and the Lakebase copy simply is not refreshed.
+        - name: sync_pipeline_id
+          default: ""
 
       tasks:
         # Pull the structured deltas + the most relevant prose chunks per account.
@@ -65,6 +69,7 @@ resources:
               - "{{job.parameters.catalog}}"
               - "{{job.parameters.schema}}"
               - "{{job.parameters.tts_speed}}"
+              - "{{job.parameters.sync_pipeline_id}}"
 
       schedule:
         quartz_cron_expression: '0 30 5 * * ?'

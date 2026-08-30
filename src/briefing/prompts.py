@@ -26,6 +26,25 @@ is fine, because that is how people talk. Starting a line with "1." is not.
 Do not recap. No mid-script summary of what you just covered, no closing list of
 takeaways. If a point needs restating, you did not make it well the first time.
 
+NEVER NARRATE YOUR OWN STRUCTURE. No "that's the hook", no "let's dive in", no "the focus
+today is", no "first up", no "to wrap up". A listener can hear where they are. Announcing
+it wastes their attention and sounds like a template.
+
+ONE HEADLINE FIGURE PER PARAGRAPH. THIS IS THE RULE THAT MATTERS MOST.
+A paragraph carries one number the listener is meant to remember, then the explanation,
+then what it means. Not the metric plus both its growth rates plus a margin plus a
+basis-point move - one figure, then prose.
+
+At most two figures in any sentence, and at most three in a paragraph including the
+headline one. If you find yourself writing "up X percent quarter-over-quarter and Y
+percent year-over-year" you have already spent the paragraph's budget on a single clause.
+Pick the one that carries the point and drop the other.
+
+Numbers you were given but did not say are not wasted. They were context for choosing
+what to say. A briefing that uses six of the twenty figures it was handed is working
+correctly; one that uses all twenty is a table read aloud, which is the single thing this
+briefing exists not to be.
+
 Never use bullet points, numbered lists, headings, bold, or any markdown. Every one of
 those is silent when spoken. If you want a list, say it as a sentence.
 Never speak the SPEAKER or SECTION labels in the source material. They are metadata.
@@ -72,6 +91,14 @@ management dodged. One idea per sentence. Cut every hedge and wind-up phrase.
 Carry the listener between beats with spoken bridges - "here's why that matters", "let me
 break that down", "now connect that back to". Never with a heading, because a heading is
 silent.
+SAY WHERE ANYTHING OUTSIDE THE FILINGS CAME FROM.
+Every news item and industry piece below carries its publication and its headline. When
+you use one, name them - "Reuters reported this week that...", "IEEE Spectrum ran a piece
+called Inside the Memory Crunch which argues...". Never "a recent report", "one analysis",
+or "industry observers say": an unattributed claim is one the listener cannot check, and
+in a briefing built on traceable sources that is the one thing that cannot be sloppy.
+Figures from the filings need no attribution; they are the company's own numbers.
+
 Quote sparingly. A few short phrases in someone's own words land harder than long
 passages. You are not summarising the call - you are explaining what happened, using the
 call as evidence. If a paragraph could be replaced by listening to the call itself, cut it.
@@ -154,14 +181,19 @@ sentence and move on. Where management leans hard on something the numbers treat
 or walks past something the numbers make large, stop and say so directly. That gap is the
 most useful thirty seconds in the briefing."""
 
-MODE_B_CORE = """One event drives this episode. Do not survey the account broadly.
+MODE_B_CORE = """This is a news day, not an earnings day. The headlines below are the
+subject of this episode. The financial figures are background - reach for one only where
+it sizes something a headline claims, and never open with them.
 
-Explain what happened, then trace it through to operational reality: which part of the
-P&L it touches, how quickly, and how large the exposure is relative to the figures you
-have. Be concrete about the mechanism, not just the headline.
+Pick the one or two developments that would actually change a customer conversation this
+week. Ignore the rest; most of a news feed is noise. Ranking them is the work.
+
+For each one: what happened, then the mechanism - which part of the business it touches,
+how quickly, and how big it is next to the figures you have. Be concrete about how it
+works, not just that it occurred.
 
 If the financial impact is not yet visible in the reported numbers, say so plainly rather
-than implying it is."""
+than implying it is. A headline is not a result."""
 
 MODE_C_CORE = """It is a quiet day, so this is a deep dive - the most valuable use of a
 day with no news.
@@ -195,16 +227,43 @@ Today's mode is {mode} ({mode_name}). Target {words} words.
 """
 
 
+# Tickers are for screens. A briefing is spoken, so it needs the spoken name.
+COMPANY_NAMES = {"NVDA": "NVIDIA"}
+
+
 def build(mode: str, account: str, deltas: str, framing: str, context: str = "",
-          macro: str = "", callback: str = "", derived_note: str = "") -> str:
+          macro: str = "", callback: str = "", derived_note: str = "",
+          news: str = "", requested_topic: str = "") -> str:
     """Assemble the prompt for one mode."""
     m = MODES[mode]
+    company = COMPANY_NAMES.get(account, account)
 
     callback_instruction = (
-        f"Open with a natural one or two sentence callback to what this rep missed last "
-        f"time, then move on. Do not dwell on it. The gap was: {callback}"
-        if callback else
-        "There is no callback for today - no graded recap exists yet. Open directly."
+        f"THE COMPANY'S NAME MUST APPEAR IN YOUR FIRST SENTENCE. Not the second. "
+        f"A rep playing four of these back to back has to know whose episode started. "
+        f"Say who this episode is about within that first sentence, using the company's "
+        f"name as a person would say it out loud - {company}, not a ticker symbol. The "
+        f"rep covers several accounts and may be playing these back to back, so they need "
+        f"to know whose episode this is. Work it into a real sentence about what "
+        f"happened - \"{company} just posted a quarter that...\" Never as an "
+        f"announcement or an appositive: not \"{company}, that's who we're covering "
+        f"today\", not \"{company}. Here's today's episode.\" And never address the "
+        f"company as if it were the listener.\n\n"
+        + (
+            f"ONE sentence, then move on: last time they recapped this account, this is "
+            f"the single thing that slipped past them, and it comes up again today.\n\n"
+            f"    {callback}\n\n"
+            f"Say it in plain words, the way you would mention it to a colleague. Do not "
+            f"list other things they missed - you have been given the one that matters "
+            f"and the rest are deliberately withheld. Do not stack numbers into it. Do "
+            f"not say \"you missed\" more than once. Do not scold. It is a nudge before "
+            f"the story starts, not a report card.\n"
+            f"It has to read as THEIR gap, not our recap: \"that one slipped past you "
+            f"last time\", never \"we warned\" or \"you heard us flag\"."
+            if callback else
+            "No graded recap exists yet, so there is nothing to call back. Go straight "
+            "into today's story after naming the company."
+        )
     )
     macro_instruction = (
         f"Ground the analysis in wider conditions using only what is provided here. Do not "
@@ -220,14 +279,42 @@ def build(mode: str, account: str, deltas: str, framing: str, context: str = "",
     phases = PHASES.format(
         callback_instruction=callback_instruction,
         core_minutes=m["core_minutes"],
-        core_instruction=m["core"],
+        core_instruction=(
+        m["core"] + (
+            f"\n\nTHE REP ASKED FOR THIS SUBJECT. Build the deep dive around it:\n\n"
+            f"    {requested_topic}\n\n"
+            f"They asked because they did not follow it the first time, so assume no "
+            f"prior understanding and build from the ground up. If the sources you have "
+            f"genuinely do not cover it, say so plainly in one sentence and teach the "
+            f"closest thing they do cover - never fill the gap from memory."
+            if requested_topic and mode == "C" else ""
+        )
+    ),
         macro_instruction=macro_instruction,
     )
 
+    # Order matters: whatever comes first reads as the subject. On a news day
+    # the filings are background, and leading with them produced an earnings
+    # recap wearing a "Today's news" label.
+    numbers_block = (
+        ("THE MEASURED NUMBERS\nComputed from SEC XBRL filings by arithmetic. Quote them "
+         "exactly as given.\n\n" + deltas)
+        if mode != "B" else
+        ("BACKGROUND FIGURES - NOT TODAY'S SUBJECT\nFrom the most recent filing, for "
+         "sizing a claim in the news above. Do not lead with these and do not walk "
+         "through them.\n\n" + deltas)
+    )
+    news_block = (
+        ("TODAY'S NEWS - THIS IS THE SUBJECT OF THE EPISODE\nEach item carries its "
+         "publication and headline. Name them when you use one.\n\n" + news)
+        if mode == "B" else
+        ("RECENT NEWS ON THIS ACCOUNT\nEach item carries its publication and headline. "
+         "Name them when you use one.\n\n" + news)
+    ) if news else ""
+
     parts = [
         HEADER.format(account=account, mode=mode, mode_name=m["name"], words=m["words"]),
-        "THE MEASURED NUMBERS\nComputed from SEC XBRL filings by arithmetic. "
-        "Quote them exactly as given.\n\n" + deltas,
+        news_block if mode == "B" else numbers_block,
         ("THE RELATIONSHIPS BETWEEN THOSE NUMBERS\nAlready calculated for you. This is "
          "where the story is. Each line already states its own direction in words - "
          "EXPANDED, COMPRESSED, ACCELERATING, SLOWING, FASTER, SLOWER. Use those words "
@@ -238,6 +325,7 @@ def build(mode: str, account: str, deltas: str, framing: str, context: str = "",
         "WHAT MANAGEMENT SAID\nThe earnings call. prepared_remarks was written in advance "
         "by investor relations. qa is unscripted, where analysts push back.\n\n" + framing
         if framing else "",
+        numbers_block if mode == "B" else news_block,
         phases,
         VOICE_RULES,
     ]
@@ -252,20 +340,66 @@ MODE_LABELS = {
     "C": "Deep dive",
 }
 
-TITLE_PROMPT = """Here is a briefing script about {account}.
+EPISODE_META_PROMPT = """Here is a briefing script about {account}.
 
-Write the episode title, the way a podcast episode is titled. It goes in a feed
-next to other episodes, so it has to make someone want to play this one.
+Write two things for the page a rep sees before they press play.
 
-Rules:
-- Six to nine words. Shorter is better.
-- Name the actual tension or finding in THIS episode. Not "NVIDIA Q2 Update" -
-  that could title any episode. Something a person could only write after
-  hearing this one.
-- No colons stacking two halves together. One clean phrase.
-- No clickbait, no questions, no "here's why". Concrete beats clever.
-- Do not use the words briefing, episode, update, or recap.
-- Plain text only. No quotes around it, no markdown, nothing else in your reply.
+TITLE - six to nine words, the way a podcast episode is titled. Name the actual tension or
+finding in THIS episode. Not "NVIDIA Q2 Update", which could title any episode; something
+you could only write after hearing this one. One clean phrase, no colon splitting it in
+two, no question, no clickbait. Never the words briefing, episode, update, or recap.
+
+TAKEAWAYS - three lines. A rep with ninety seconds and no time to listen should still walk
+away with the point. Each line is one sentence, states something concrete, and includes the
+number that makes it real. Not "margins are under pressure" but "gross margin holds at 75
+percent but management guides to 74 next quarter on memory prices". Order them by what
+matters most to a customer conversation. Do not repeat the title.
+
+Reply with JSON only, no other text:
+{{"title": "...", "takeaways": ["...", "...", "..."]}}
+
+Script:
+{script}"""
+
+
+QUESTIONS_PROMPT = """Here is a briefing script about {account}.
+
+Write three comprehension questions for the rep who just listened to it.
+
+This replaces asking them to recap freely. A free recap is hard to grade fairly and lets a
+rep skate by on whatever they happened to remember. Three questions aimed at the things
+that actually matter make the gaps visible.
+
+What makes a good question here:
+- It targets something that would change a customer conversation, not a trivia detail.
+- It can be answered in two or three spoken sentences.
+- Someone who understood the episode can answer it; someone who half-listened cannot.
+- It asks for the WHY or the SO WHAT, not just recall of a number. Not "what was gross
+  margin" but "why is gross margin expected to fall next quarter, and what does that mean
+  for how this account buys".
+
+Every question must be answerable from the script alone. Do not reach for anything the
+script does not say, and never attribute a figure to a company other than {account} - a
+generated question that says "TSMC's 156-basis-point margin expansion" when that figure is
+{account}'s own is asking about something that did not happen, and the rep cannot answer
+it correctly.
+
+Prefer questions that need no figure at all. "Why is gross margin expected to fall next
+quarter, and what does that mean for how this account buys" is a better question than one
+built around a number, because it tests understanding rather than recall.
+
+Order them by importance. The first question should be the single thing you would want the
+rep to have taken away.
+
+For each, also write what a good answer contains - the two or three points that must be
+present. This is what the answer gets graded against, so be concrete and specific to this
+episode.
+
+Reply with JSON only, no other text:
+{{"questions": [
+  {{"question": "...", "expected_points": ["...", "..."], "why_it_matters": "one line"}},
+  ...
+]}}
 
 Script:
 {script}"""

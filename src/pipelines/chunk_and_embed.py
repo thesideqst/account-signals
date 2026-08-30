@@ -134,6 +134,9 @@ def silver_doc_chunks():
             "speaker", "role", "section",
             F.col("turn_index"), F.col("part_index"), "sentence_count",
             F.length("chunk_text").alias("char_count"),
+            # Transcripts are attributed by speaker, not publication.
+            F.lit(None).cast("string").alias("publisher"),
+            F.lit(None).cast("string").alias("headline"),
             F.struct("fiscal_year", "fiscal_quarter").alias("period"),
         )
     )
@@ -212,13 +215,17 @@ def silver_doc_chunks():
             F.concat_ws(":", F.lit("news"), F.col("source"),
                         F.abs(F.hash("url")).cast("string")).alias("chunk_id"),
             F.concat_ws(". ", F.col("title"), F.col("summary")).alias("chunk_text"),
-            F.col("publisher").alias("speaker"),
+            F.lit(None).cast("string").alias("speaker"),
             F.lit(None).cast("string").alias("role"),
             F.lit(None).cast("string").alias("section"),
             F.lit(None).cast("int").alias("turn_index"),
             F.lit(0).alias("part_index"),
             F.lit(1).alias("sentence_count"),
             F.length(F.concat_ws(". ", F.col("title"), F.col("summary"))).alias("char_count"),
+            # Google News nests the outlet; Yahoo often leaves it blank.
+            F.coalesce(F.nullif(F.col("publisher"), F.lit("")),
+                       F.col("source")).alias("publisher"),
+            F.col("title").alias("headline"),
             F.lit(None).cast("struct<fiscal_year:int,fiscal_quarter:int>").alias("period"),
         )
     )

@@ -23,13 +23,24 @@ import urllib.request
 
 SPEECH_URL = "https://api.openai.com/v1/audio/speech"
 MODEL = "gpt-4o-mini-tts"
-VOICE = "nova"
+VOICE = "ballad"
 # Measured against the browser's own reported duration, not a computed one:
 # at speed 1.0 this reads at roughly 153 words per minute, which is normal
 # narration pace. An earlier estimate of 264 wpm came from misreading the mp3
 # bitrate and led to slowing the voice unnecessarily.
 DEFAULT_SPEED = 1.0
 MAX_INPUT_CHARS = 4000          # endpoint caps at 4096; leave headroom
+
+# gpt-4o-mini-tts takes delivery instructions alongside the text. Without them
+# it reads like a machine working through a document, which is most of what
+# made earlier versions unlistenable. This steers pace and emphasis; it does
+# not change a word of the script.
+DELIVERY = (
+    "Speak like a smart friend explaining something over coffee. Conversational "
+    "and unhurried, with natural pauses between ideas. Land the important "
+    "numbers - slow slightly on them rather than rushing past. Warm, not "
+    "newsreaderly. Never sing-song, never breathless."
+)
 VOLUME_PATH = "/Volumes/{catalog}/{schema}/audio/{account}/{period}.mp3"
 
 
@@ -64,6 +75,7 @@ def speak(text: str, key: str, speed: float = DEFAULT_SPEED, tries: int = 4) -> 
     body = json.dumps({
         "model": MODEL, "voice": VOICE, "input": text,
         "response_format": "mp3", "speed": speed,
+        "instructions": DELIVERY,
     }).encode()
     req = urllib.request.Request(
         SPEECH_URL, data=body,
@@ -144,7 +156,7 @@ def main() -> None:
     spark.sql(f"""
         CREATE OR REPLACE TABLE {catalog}.{schema}.gold_briefing_serving AS
         SELECT b.briefing_id, b.account_id, b.period_end, b.generated_at,
-               b.mode, b.mode_reason, b.episode_title, b.mode_label,
+               b.mode, b.mode_reason, b.episode_title, b.mode_label, b.takeaways, b.questions, b.lineage,
                b.script_text, b.word_count,
                a.audio_path, a.audio_bytes, a.voice
         FROM {catalog}.{schema}.gold_briefing_current b
@@ -157,12 +169,16 @@ def main() -> None:
     # refresh on its own. Rebuilding the source table leaves the app showing the
     # previous episode until this pipeline runs, so trigger it here rather than
     # relying on someone remembering.
-    SYNC_PIPELINE_ID = "fbcc82c7-e931-41b0-b268-fc6014e3d207"
+    # The pipeline id is created by `databricks postgres create-synced-table`,
+    # so it differs per workspace. Passed in rather than hardcoded.
+    sync_pipeline_id = sys.argv[4] if len(sys.argv) > 4 else ""
     try:
+        if not sync_pipeline_id:
+            raise RuntimeError("no sync pipeline id supplied")
         from databricks.sdk import WorkspaceClient
 
-        WorkspaceClient().pipelines.start_update(pipeline_id=SYNC_PIPELINE_ID)
-        print(f"triggered Lakebase sync pipeline {SYNC_PIPELINE_ID}")
+        WorkspaceClient().pipelines.start_update(pipeline_id=sync_pipeline_id)
+        print(f"triggered Lakebase sync pipeline {sync_pipeline_id}")
     except Exception as e:
         # A stale app is bad but not worth failing the whole briefing over.
         print(f"WARNING could not trigger sync: {type(e).__name__}: {e}")
@@ -176,10 +192,6 @@ def main() -> None:
 
 
 
-APP_SP_CLIENT_ID = os.environ.get("APP_SP_CLIENT_ID", "")
-LAKEBASE_ENDPOINT = (
-    "projects/account-signals-dev/branches/production/endpoints/primary"
-)
 
 
 def regrant_app_access() -> None:

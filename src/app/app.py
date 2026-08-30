@@ -18,7 +18,8 @@ import os
 
 import psycopg
 from databricks.sdk import WorkspaceClient
-from fastapi import FastAPI, HTTPException
+from databricks.sdk.service.serving import ChatMessage, ChatMessageRole
+from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi import Response
 from fastapi.responses import HTMLResponse
 from psycopg.rows import dict_row
@@ -27,8 +28,10 @@ app = FastAPI(title="account_signals")
 
 CATALOG = os.environ.get("CATALOG", "workspace")
 SCHEMA = os.environ.get("SCHEMA", "account_signals_dev")
-LAKEBASE_ENDPOINT = (
-    "projects/account-signals-dev/branches/production/endpoints/primary"
+# Differs per workspace; set in app.yaml rather than hardcoded here.
+LAKEBASE_ENDPOINT = os.environ.get(
+    "LAKEBASE_ENDPOINT",
+    "projects/account-signals-dev/branches/production/endpoints/primary",
 )
 _w = None
 
@@ -130,7 +133,8 @@ def briefing(account_id: str):
     with pg() as c:
         row = c.execute("""
             SELECT briefing_id, account_id, period_end, generated_at, mode,
-                   mode_reason, episode_title, mode_label,
+                   mode_reason, episode_title, mode_label, takeaways,
+                   questions, lineage,
                    script_text, word_count, audio_path, voice
             FROM app.gold_briefing_serving
             WHERE account_id = %s ORDER BY generated_at DESC LIMIT 1
@@ -207,6 +211,237 @@ def audio(account_id: str):
                  "Accept-Ranges": "bytes",
                  "Cache-Control": "no-cache"},
     )
+
+
+def stt_key() -> str:
+    """OpenAI key from the Databricks secret scope. The app service principal
+    needs READ on the scope; without it this raises and the endpoint says so."""
+    return workspace().secrets.get_secret(
+        scope="account_signals", key="stt_api_key").value
+
+
+def _transcribe(raw: bytes) -> str:
+    """Whisper via OpenAI. Multipart is hand-built to avoid another dependency."""
+    import json as _json
+    import urllib.request
+
+    if not raw:
+        raise HTTPException(400, "empty recording")
+    boundary = "----accountsignals"
+    def part(name, value, filename=None, ctype=None):
+        head = f'--{boundary}\r\nContent-Disposition: form-data; name="{name}"'
+        if filename:
+            head += f'; filename="{filename}"'
+        head += "\r\n"
+        if ctype:
+            head += f"Content-Type: {ctype}\r\n"
+        return head.encode() + b"\r\n" + (value if isinstance(value, bytes)
+                                            else value.encode()) + b"\r\n"
+    body = (part("model", "whisper-1")
+            + part("file", raw, filename="a.webm", ctype="audio/webm")
+            + f"--{boundary}--\r\n".encode())
+    req = urllib.request.Request(
+        "https://api.openai.com/v1/audio/transcriptions", data=body,
+        headers={"Authorization": f"Bearer {stt_key()}",
+                 "Content-Type": f"multipart/form-data; boundary={boundary}"})
+    try:
+        with urllib.request.urlopen(req, timeout=120) as r:
+            text = _json.loads(r.read()).get("text", "").strip()
+    except Exception as e:
+        detail = getattr(e, "read", lambda: b"")()[:200].decode("utf-8", "replace")
+        raise HTTPException(502, f"transcription failed: {type(e).__name__} {detail}")
+    if not text:
+        raise HTTPException(422, "nothing was transcribed - try speaking longer")
+    return text
+
+
+@app.post("/api/recap/{account_id}")
+async def submit_recap(account_id: str, audio: UploadFile = File(...),
+                       rep_id: str = Form("web-user")):
+    """Take a spoken recap, transcribe it, write it to Lakebase.
+
+    This INSERT is what starts the write-back: the recap returns to Unity
+    Catalog through Lakehouse Federation, gets graded against the briefing it
+    was recalling, and the gaps become the callback in the next episode.
+    """
+    import base64
+    import json as _json
+    import urllib.request
+
+    raw = await audio.read()
+    if not raw:
+        raise HTTPException(400, "empty recording")
+
+    # OpenAI's transcription endpoint takes multipart, hand-built here to avoid
+    # another dependency in the app runtime.
+    boundary = "----accountsignals"
+    def part(name, value, filename=None, ctype=None):
+        head = f'--{boundary}\r\nContent-Disposition: form-data; name="{name}"'
+        if filename:
+            head += f'; filename="{filename}"'
+        head += "\r\n"
+        if ctype:
+            head += f"Content-Type: {ctype}\r\n"
+        return head.encode() + b"\r\n" + (value if isinstance(value, bytes)
+                                            else value.encode()) + b"\r\n"
+
+    body = (part("model", "whisper-1")
+            + part("file", raw, filename="recap.webm", ctype="audio/webm")
+            + f"--{boundary}--\r\n".encode())
+
+    req = urllib.request.Request(
+        "https://api.openai.com/v1/audio/transcriptions", data=body,
+        headers={"Authorization": f"Bearer {stt_key()}",
+                 "Content-Type": f"multipart/form-data; boundary={boundary}"})
+    try:
+        with urllib.request.urlopen(req, timeout=120) as r:
+            transcript = _json.loads(r.read()).get("text", "").strip()
+    except Exception as e:
+        detail = getattr(e, "read", lambda: b"")()[:200].decode("utf-8", "replace")
+        raise HTTPException(502, f"transcription failed: {type(e).__name__} {detail}")
+
+    if not transcript:
+        raise HTTPException(422, "nothing was transcribed - try speaking longer")
+
+    seconds = int(len(raw) / 16000)   # rough, webm/opus is variable bitrate
+    try:
+        with pg() as c:
+            row = c.execute("""
+                INSERT INTO app.recall_recaps
+                    (account_id, rep_id, briefing_date, transcript, audio_seconds)
+                VALUES (%s, %s, current_date, %s, %s)
+                RETURNING recap_id
+            """, (account_id, rep_id, transcript, seconds)).fetchone()
+    except Exception as e:
+        raise HTTPException(500, f"could not save recap: {type(e).__name__}: {str(e)[:200]}")
+
+    return {"recap_id": row["recap_id"], "transcript": transcript,
+            "seconds": seconds}
+
+
+@app.get("/api/grade/{account_id}")
+def grade(account_id: str):
+    """Most recent grade for this account, if grading has run since."""
+    try:
+        with pg() as c:
+            row = c.execute("""
+                SELECT recap_id, accuracy, one_line, gaps
+                FROM app.gold_recall_grades
+                WHERE account_id = %s ORDER BY graded_at DESC LIMIT 1
+            """, (account_id,)).fetchone()
+        return row or {}
+    except Exception:
+        # Grades only reach Postgres once that table is synced; absence is normal.
+        return {}
+
+
+GRADE_PROMPT = """A sales rep listened to a briefing about {account} and was asked:
+
+    {question}
+
+A good answer contains: {expected}
+
+They said:
+
+    {answer}
+
+Grade what they actually understood, not their wording. Someone who gets the idea across
+in loose language has understood it; someone who repeats a number without the reason has
+not.
+
+Reply with JSON only:
+{{"score": <0-100>, "verdict": "one sentence said to them directly",
+  "missed": "the single most important thing they left out, or empty string"}}"""
+
+
+@app.post("/api/answer/{account_id}")
+async def answer(account_id: str, audio: UploadFile = File(...),
+                 briefing_id: str = Form(...), question_index: int = Form(...),
+                 question: str = Form(...), expected: str = Form(""),
+                 rep_id: str = Form("web-user")):
+    """Transcribe one spoken answer, grade it immediately, store it.
+
+    Graded here rather than in the nightly job because feedback that arrives
+    tomorrow does not teach anyone anything. Three targeted answers are small
+    enough to judge in a couple of seconds, which a free-form recap was not.
+    """
+    import json as _json
+
+    transcript = _transcribe(await audio.read())
+
+    resp = workspace().serving_endpoints.query(
+        name="databricks-gpt-oss-120b",
+        messages=[ChatMessage(role=ChatMessageRole.USER,
+                              content=GRADE_PROMPT.format(
+                                  account=account_id, question=question,
+                                  expected=expected or "(not supplied)",
+                                  answer=transcript))],
+        max_tokens=1200, temperature=0.2,
+    )
+    raw = resp.choices[0].message.content
+    text = raw if isinstance(raw, str) else "\n".join(
+        (getattr(pt, "text", None) or (pt.get("text") if isinstance(pt, dict) else "") or "")
+        for pt in (raw or []))
+    if "```" in text:
+        text = text.split("```")[1].removeprefix("json").strip()
+    try:
+        v = _json.loads(text[text.index("{"):text.rindex("}") + 1])
+    except Exception:
+        v = {"score": None, "verdict": "Could not grade this answer.", "missed": ""}
+
+    with pg() as c:
+        c.execute("""
+            INSERT INTO app.recap_answers
+                (briefing_id, account_id, rep_id, question_index, question,
+                 answer, score, verdict, missed)
+            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)
+        """, (briefing_id, account_id, rep_id, question_index, question,
+              transcript, v.get("score"), str(v.get("verdict") or ""),
+              str(v.get("missed") or "")))
+
+    return {"transcript": transcript, "score": v.get("score"),
+            "verdict": v.get("verdict"), "missed": v.get("missed") or ""}
+
+
+@app.post("/api/topic/{account_id}")
+def add_topic(account_id: str, topic: str = Form(...), origin: str = Form("manual"),
+              rep_id: str = Form("web-user")):
+    """Queue a subject for a future episode.
+
+    Two ways in: one click from something they just got wrong, or typed. On a
+    quiet day this queue is what the episode is about.
+    """
+    if not topic.strip():
+        raise HTTPException(400, "empty topic")
+    with pg() as c:
+        row = c.execute("""
+            INSERT INTO app.topic_requests (account_id, rep_id, topic, origin)
+            VALUES (%s,%s,%s,%s) RETURNING request_id
+        """, (account_id, rep_id, topic.strip()[:500], origin)).fetchone()
+    return {"request_id": row["request_id"], "topic": topic.strip()}
+
+
+@app.get("/api/topics/{account_id}")
+def topics(account_id: str):
+    with pg() as c:
+        return c.execute("""
+            SELECT request_id, topic, origin, requested_at
+            FROM app.topic_requests
+            WHERE account_id = %s AND status = 'queued'
+            ORDER BY requested_at DESC LIMIT 20
+        """, (account_id,)).fetchall()
+
+
+@app.get("/api/episodes/{account_id}")
+def episodes(account_id: str):
+    """Past episodes, newest first."""
+    with pg() as c:
+        return c.execute("""
+            SELECT briefing_id, episode_title, mode_label, period_end,
+                   generated_at, word_count
+            FROM app.gold_briefing_serving
+            WHERE account_id = %s ORDER BY generated_at DESC LIMIT 30
+        """, (account_id,)).fetchall()
 
 
 @app.get("/", response_class=HTMLResponse)

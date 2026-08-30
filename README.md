@@ -42,8 +42,29 @@ FRED macro ─┘                                                   ↓
                      Lakehouse Federation ─► grading ─► gaps ─► tomorrow's cold open
 ```
 
-Six sources. Three briefing modes, chosen in SQL from what actually landed that
-day: earnings, breaking news, or a quiet-day deep dive.
+Six sources. The episode's shape is chosen in SQL by strict priority, not a
+score — a weighted blend would occasionally let three minor news items outvote
+an earnings call:
+
+| | Trigger | The episode is |
+|---|---|---|
+| **A** | an earnings call or filing landed | that quarter, numbers against management's framing |
+| **B** | real news, no earnings | the news; feedback comes later if there is room |
+| **C** | neither | whatever the rep has queued |
+
+Mode C is why the topic queue exists. Without it the model would choose the
+subject from its own knowledge, which is the one thing this project is built
+not to do.
+
+## The loop
+
+After listening, the rep answers **three comprehension questions** out loud.
+Each is transcribed and graded the moment they stop speaking — score, verdict,
+and what they missed. Anything they miss becomes a one-click request for a
+future episode, and on a quiet day that queue chooses the subject.
+
+Free-form recall was the first design and it was worse: hard to grade fairly,
+and it let a rep skate by on whatever they happened to remember.
 
 ## Built with
 

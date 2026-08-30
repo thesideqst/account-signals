@@ -67,17 +67,57 @@ def main() -> None:
         ORDER BY metric
     """).collect()
 
+    # Hand over three metrics, not five. Told to "select two or three", the model
+    # narrated all five and produced a paragraph carrying twelve figures - it was
+    # reading the input back. Selecting here is the same fix as the callback:
+    # give it the choice already made.
+    #
+    # Revenue always goes in; it is the spine. The other two are whichever
+    # diverge most from revenue's own growth rate, because divergence is where
+    # the story is - a cost line growing faster than sales, or profit growing
+    # slower than operating income.
+    # Spark Row has no .get(), so convert before treating these as dicts.
+    by_metric = {r["metric"]: r.asDict() for r in deltas}
+    deltas = [r.asDict() for r in deltas]
+    rev_yoy = by_metric.get("revenue", {}).get("yoy_pct")
+    def divergence(r):
+        if r["metric"] == "revenue" or r.get("yoy_pct") is None or rev_yoy is None:
+            return -1.0
+        return abs(r["yoy_pct"] - rev_yoy)
+    ranked = sorted((r for r in deltas if r["metric"] != "revenue"),
+                    key=divergence, reverse=True)[:2]
+    deltas = ([by_metric["revenue"]] if "revenue" in by_metric else []) + ranked
+    print("metrics selected: " + ", ".join(r["metric"] for r in deltas))
+
     delta_lines = []
     for r in deltas:
         f = lambda x: "not available" if x is None else f"{x * 100:+.1f}%"
         note = (" (DERIVED: the company did not file this figure; it was computed "
                 "as the annual total minus the three reported quarters)"
                 if r["is_derived"] else " (as filed)")
-        delta_lines.append(
-            f"- {r['metric']}: ${r['value'] / 1e9:,.3f} billion{note}. "
-            f"Quarter over quarter {f(r['qoq_pct'])} (vs {r['prev_q_end']}). "
-            f"Year over year {f(r['yoy_pct'])} (vs {r['prev_y_end']})."
-        )
+        # Revenue carries both rates because it anchors the episode. The two
+        # supporting metrics get year-over-year only: handing over six growth
+        # figures invites six growth figures back.
+        if r["metric"] == "revenue":
+            delta_lines.append(
+                f"- {r['metric']}: ${r['value'] / 1e9:,.1f} billion{note}. "
+                f"Quarter over quarter {f(r['qoq_pct'])}. "
+                f"Year over year {f(r['yoy_pct'])}."
+            )
+        else:
+            delta_lines.append(
+                f"- {r['metric']}: ${r['value'] / 1e9:,.1f} billion{note}, "
+                f"year over year {f(r['yoy_pct'])}."
+            )
+
+    # Mode is needed before retrieval, because what gets retrieved depends on it.
+    _sig = spark.sql(f"""
+        SELECT mode FROM {catalog}.{schema}.silver_daily_signals
+        WHERE symbol = '{account}' AND signal_date = (
+            SELECT max(signal_date) FROM {catalog}.{schema}.silver_daily_signals
+            WHERE symbol = '{account}')
+    """).collect()
+    mode = _sig[0]["mode"] if _sig else "C"
 
     # The computed "so what": margins, basis-point moves, growth relationships.
     # Handed to the model already calculated so it explains rather than derives.
@@ -147,6 +187,13 @@ def main() -> None:
 
     # The bracketed labels are metadata for you, not text to speak. An earlier
     # run read "[Toshiya Hari, prepared_remarks]" aloud verbatim.
+    # On a news day the earnings call is not the subject. Passing all 32 chunks
+    # of it buried 18 headlines by sheer volume and produced an earnings recap
+    # labelled "Today's news", so Mode B gets a short excerpt for context only.
+    if mode == "B":
+        chunks = [c for c in chunks if c["section"] == "prepared_remarks"][:4]
+        print(f"mode B: transcript trimmed to {len(chunks)} chunks for context")
+
     framing = "\n\n".join(
         f"SPEAKER: {c['speaker']} | SECTION: {c['section']}\nSAID: {c['chunk_text']}"
         for c in chunks
@@ -189,17 +236,34 @@ def main() -> None:
             WHERE account_id = '{account}' ORDER BY graded_at DESC LIMIT 1
         """).collect()
         if g:
-            callback = str(g[0]["gaps"])
+            # Pass the single most important gap, phrased as a sentence. Handing
+            # over the whole JSON list produced a cold open that recited eight
+            # items and scolded three times.
+            parsed = json.loads(g[0]["gaps"] or "[]")
+            rank = {"high": 0, "medium": 1, "low": 2}
+            parsed.sort(key=lambda x: rank.get(str(x.get("importance")).lower(), 3))
+            if parsed:
+                callback = str(parsed[0].get("point", "")).strip()
     except Exception:
         pass
 
     # Phase 3 material. Macro first: rates and capex, with direction in words
     # for the same reason the metric context states its own direction.
-    macro_lines = []
-    for m in spark.sql(f"""
+    # Two series, not five. Phase 3 is meant to connect one macro condition to
+    # this account, and five series invites a paragraph of unexplained readings.
+    # Rank by how much each actually moved, relative to its own level.
+    macro_rows = [m.asDict() for m in spark.sql(f"""
         SELECT series_name, latest_value, latest_date, change_90d, direction_90d
-        FROM {catalog}.{schema}.silver_macro_context ORDER BY series_id
-    """).collect():
+        FROM {catalog}.{schema}.silver_macro_context
+    """).collect()]
+    def moved(m):
+        if not m.get("change_90d") or not m.get("latest_value"):
+            return 0.0
+        return abs(m["change_90d"] / m["latest_value"])
+    macro_rows = sorted(macro_rows, key=moved, reverse=True)[:2]
+
+    macro_lines = []
+    for m in macro_rows:
         d = m["direction_90d"]
         move = ("has not moved" if d == "FLAT" else
                 f"is {d.lower()} - {abs(m['change_90d']):.2f} "
@@ -212,13 +276,36 @@ def main() -> None:
     # Then industry context. These are not account-specific, so they are capped
     # at recent items rather than everything the feeds have ever published.
     trend_rows = spark.sql(f"""
-        SELECT chunk_text, published_at
+        SELECT publisher, headline, chunk_text, published_at
         FROM {catalog}.{schema}.silver_doc_chunks
         WHERE source_type = 'industry_trend'
           AND published_at >= date_sub(current_date(), 45)
-        ORDER BY published_at DESC LIMIT 14
+        ORDER BY published_at DESC LIMIT 10
     """).collect()
-    trend_lines = [f"- ({t['published_at']}) {t['chunk_text'][:400]}" for t in trend_rows]
+    # Publication and headline travel with every item so the script can say
+    # where a claim came from instead of "a recent report".
+    trend_lines = [
+        f"- {t['publisher']}, \"{t['headline']}\" ({t['published_at']}): "
+        f"{(t['chunk_text'] or '')[:340]}"
+        for t in trend_rows
+    ]
+
+    # News is account-specific and is the SUBJECT of a Mode B episode, not
+    # background. It was never passed before, so Mode B fired on news signals
+    # and then produced an earnings recap labelled "Today's news".
+    news_rows = spark.sql(f"""
+        SELECT publisher, headline, chunk_text, published_at
+        FROM {catalog}.{schema}.silver_doc_chunks
+        WHERE source_type = 'news' AND account_id = '{account}'
+          AND published_at >= date_sub(current_date(), 10)
+        ORDER BY published_at DESC LIMIT 18
+    """).collect()
+    news_lines = [
+        f"- {n['publisher'] or 'unattributed'}, \"{n['headline']}\" "
+        f"({n['published_at']}): {(n['chunk_text'] or '')[:260]}"
+        for n in news_rows
+    ]
+    print(f"news: {len(news_lines)} items")
 
     macro_block = ""
     if macro_lines or trend_lines:
@@ -231,8 +318,29 @@ def main() -> None:
         )
     print(f"macro: {len(macro_lines)} series, {len(trend_lines)} trend items")
 
+    # On a quiet day the rep's queue picks the subject. Without this Mode C has
+    # nothing to deep-dive on and the model chooses from its own knowledge,
+    # which is the one thing the grounding rule exists to prevent.
+    requested_topic = ""
+    if mode == "C":
+        try:
+            q = spark.sql(f"""
+                SELECT topic FROM {catalog}.{schema}.topic_queue_current
+                WHERE account_id = '{account}'
+                ORDER BY requested_at ASC LIMIT 1
+            """).collect()
+            if q:
+                requested_topic = q[0]["topic"]
+                print(f"mode C subject from the queue: {requested_topic[:80]}")
+            else:
+                print("mode C with an empty queue - no requested subject")
+        except Exception as e:
+            print(f"  topic queue unavailable: {type(e).__name__}")
+
     prompt = prompts.build(
         mode=mode,
+        requested_topic=requested_topic,
+        news="\n".join(news_lines),
         account=account,
         deltas="\n".join(delta_lines),
         context="\n".join(context_lines),
@@ -276,6 +384,24 @@ def main() -> None:
     if found:
         print(f"FORMAT WARNING - script contains print-only formatting: {found}")
 
+    # Reciting numbers is the failure this briefing keeps regressing into, so
+    # count them rather than trusting the instruction. A sentence carrying four
+    # or more figures is a table being read aloud.
+    num = _re.compile(r"\$?\d[\d,.]*\s?(?:percent|billion|million|basis points)?")
+    dense = [sent.strip() for sent in _re.split(r"(?<=[.!?])\s+", script)
+             if len(num.findall(sent)) >= 4]
+    if dense:
+        print(f"DENSITY WARNING - {len(dense)} sentence(s) carry 4+ figures:")
+        for sent in dense[:3]:
+            print(f"    {sent[:110]}")
+
+    # The dump shows up per paragraph, not per sentence: a run of short
+    # sentences with two figures each slips a per-sentence check entirely.
+    for i, para in enumerate([p for p in script.split("\n") if p.strip()], 1):
+        n = len(num.findall(para))
+        if n >= 8:
+            print(f"DENSITY WARNING - paragraph {i} carries {n} figures: {para[:110]}")
+
     words = len(script.split())
     print(f"script: {words:,} words, ~{words / 150:.1f} minutes read aloud")
 
@@ -288,36 +414,115 @@ def main() -> None:
     now = datetime.now(timezone.utc)
     briefing_id = f"{account}-{period}-{now:%Y%m%dT%H%M%S}"
 
-    # Title as a second, cheap call rather than asking for it inside the script.
-    # Folded in, the model kept writing the title as the opening line and the
-    # narrator read it aloud.
-    title_resp = w.serving_endpoints.query(
+    # Provenance for this specific episode: what each layer contributed, and how
+    # stale it was. Captured here because the job is the only thing that knows
+    # what it actually read - reconstructing it later would be guesswork.
+    def scalar(sql, default=None):
+        try:
+            return spark.sql(sql).collect()[0][0]
+        except Exception:
+            return default
+
+    lineage = {
+        "bronze": [
+            {"source": "SEC EDGAR XBRL", "table": "bronze_xbrl_facts",
+             "rows": scalar(f"SELECT count(*) FROM {catalog}.{schema}.bronze_xbrl_facts", 0),
+             "last_ingested": str(scalar(f"SELECT max(_ingested_at) FROM {catalog}.{schema}.bronze_xbrl_facts"))},
+            {"source": "Earnings call (Roic AI)", "table": "bronze_transcript_turns",
+             "rows": scalar(f"SELECT count(*) FROM {catalog}.{schema}.bronze_transcript_turns", 0),
+             "last_ingested": str(scalar(f"SELECT max(_ingested_at) FROM {catalog}.{schema}.bronze_transcript_turns"))},
+            {"source": "News (Google, Yahoo)", "table": "bronze_news",
+             "rows": scalar(f"SELECT count(*) FROM {catalog}.{schema}.bronze_news", 0),
+             "last_ingested": str(scalar(f"SELECT max(_ingested_at) FROM {catalog}.{schema}.bronze_news"))},
+            {"source": "Analyst grades (FMP)", "table": "bronze_analyst_ratings",
+             "rows": scalar(f"SELECT count(*) FROM {catalog}.{schema}.bronze_analyst_ratings", 0),
+             "last_ingested": str(scalar(f"SELECT max(_ingested_at) FROM {catalog}.{schema}.bronze_analyst_ratings"))},
+            {"source": "Industry trends (RSS)", "table": "bronze_industry_trends",
+             "rows": scalar(f"SELECT count(*) FROM {catalog}.{schema}.bronze_industry_trends", 0),
+             "last_ingested": str(scalar(f"SELECT max(_ingested_at) FROM {catalog}.{schema}.bronze_industry_trends"))},
+            {"source": "Macro (FRED)", "table": "bronze_macro",
+             "rows": scalar(f"SELECT count(*) FROM {catalog}.{schema}.bronze_macro", 0),
+             "last_ingested": str(scalar(f"SELECT max(_ingested_at) FROM {catalog}.{schema}.bronze_macro"))},
+        ],
+        "silver": [
+            {"table": "silver_financial_deltas", "used": len(delta_lines),
+             "note": "metrics selected for this episode"},
+            {"table": "silver_metric_context", "used": len(context_lines),
+             "note": "computed relationships"},
+            {"table": "silver_doc_chunks (transcript)", "used": len(chunks),
+             "note": "management framing"},
+            {"table": "silver_doc_chunks (news)", "used": len(news_lines),
+             "note": "headlines"},
+            {"table": "silver_doc_chunks (trends)", "used": len(trend_lines),
+             "note": "industry context"},
+            {"table": "silver_macro_context", "used": len(macro_lines),
+             "note": "macro series"},
+        ],
+        "gold": {"mode": mode, "mode_reason": mode_reason,
+                 "prompt_chars": len(prompt), "model": endpoint},
+    }
+
+    # Title and takeaways in one call, kept separate from the script. Folded
+    # into the script prompt, the model wrote the title as the opening line and
+    # the narrator read it aloud.
+    meta_resp = w.serving_endpoints.query(
         name=endpoint,
         messages=[ChatMessage(role=ChatMessageRole.USER,
-                              content=prompts.TITLE_PROMPT.format(
+                              content=prompts.EPISODE_META_PROMPT.format(
                                   account=account, script=script))],
-        # This is a reasoning model: it spends tokens thinking before it writes.
-        # At max_tokens=60 the whole budget went to reasoning and the title came
-        # back empty, so the ceiling has to cover both.
-        max_tokens=800, temperature=0.7,
+        # Reasoning model: the budget covers thinking plus the JSON. At 60 the
+        # whole budget went to reasoning and the answer came back empty.
+        max_tokens=1200, temperature=0.6,
     )
-    title_text = extract_text(title_resp.choices[0].message.content)
-    # Take the last non-empty line: any preamble comes before the answer.
-    lines = [ln.strip().strip('"').strip("'")
-             for ln in title_text.splitlines() if ln.strip()]
-    episode_title = (lines[-1][:120] if lines else "")
+    meta_text = extract_text(meta_resp.choices[0].message.content).strip()
+    if "```" in meta_text:
+        meta_text = meta_text.split("```")[1].removeprefix("json").strip()
+    episode_title, takeaways = "", []
+    try:
+        meta = json.loads(meta_text[meta_text.index("{"):meta_text.rindex("}") + 1])
+        episode_title = str(meta.get("title") or "").strip().strip('"')[:120]
+        takeaways = [str(t).strip() for t in (meta.get("takeaways") or []) if str(t).strip()]
+    except Exception as e:
+        print(f"  WARNING could not parse episode metadata ({e})")
     if not episode_title:
-        episode_title = f"{account} briefing"   # never leave the card blank
+        episode_title = f"{account} briefing"     # never leave the card blank
     mode_label = prompts.MODE_LABELS.get(mode, mode)
+
+    # Three comprehension questions, generated with the episode and stored on it.
+    # Grading three targeted answers is fairer than grading a free recap, and it
+    # is fast enough to run the moment the rep finishes speaking.
+    q_resp = w.serving_endpoints.query(
+        name=endpoint,
+        messages=[ChatMessage(role=ChatMessageRole.USER,
+                              content=prompts.QUESTIONS_PROMPT.format(
+                                  account=account, script=script))],
+        max_tokens=1600, temperature=0.4,
+    )
+    q_text = extract_text(q_resp.choices[0].message.content).strip()
+    if "```" in q_text:
+        q_text = q_text.split("```")[1].removeprefix("json").strip()
+    questions = []
+    try:
+        questions = json.loads(
+            q_text[q_text.index("{"):q_text.rindex("}") + 1]).get("questions", [])[:3]
+    except Exception as e:
+        print(f"  WARNING could not parse questions ({e})")
+    for i, q in enumerate(questions, 1):
+        print(f"  Q{i}: {str(q.get('question',''))[:88]}")
     print(f"title: {episode_title!r}")
+    for t in takeaways:
+        print(f"  takeaway: {t[:95]}")
 
     spark.createDataFrame(
         [(briefing_id, account, str(period), now, mode, mode_reason,
-          episode_title, mode_label, script, words,
+          episode_title, mode_label, json.dumps(takeaways),
+          json.dumps(questions), json.dumps(lineage), script, words,
           endpoint, json.dumps([r["metric"] for r in deltas]), len(chunks), len(prompt))],
         "briefing_id string, account_id string, period_end string, "
         "generated_at timestamp, mode string, mode_reason string, "
-        "episode_title string, mode_label string, script_text string, word_count int, "
+        "episode_title string, mode_label string, takeaways string, questions string, "
+        "lineage string, "
+        "script_text string, word_count int, "
         "model string, metrics string, chunk_count int, prompt_chars int",
     ).write.mode("append").saveAsTable(f"{catalog}.{schema}.gold_briefing")
 

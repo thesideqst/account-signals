@@ -11,5 +11,7 @@ env:
     value: workspace
   - name: SCHEMA
     value: account_signals_dev
+  - name: LAKEBASE_ENDPOINT
+    value: projects/account-signals-dev/branches/production/endpoints/primary
   # Lakebase injects PGHOST / PGDATABASE / PGUSER / PGPASSWORD / PGPORT when a
   # postgres resource is attached to the app. No connection string is stored here.

@@ -81,6 +81,20 @@ def main() -> None:
     """)
     print(f"refreshed view {catalog}.{schema}.recall_recaps_current")
 
+    # The topic queue comes back the same way. On a quiet day it is what the
+    # episode is about, so Mode C stops having to invent a subject.
+    spark.sql(f"""
+        CREATE OR REPLACE VIEW {catalog}.{schema}.topic_queue_current AS
+        SELECT request_id, account_id, rep_id, topic, origin, status,
+               requested_at, used_at
+        FROM {LAKEBASE_CATALOG}.app.topic_requests
+        WHERE status = 'queued'
+    """)
+    n = spark.sql(
+        f"SELECT count(*) AS n FROM {catalog}.{schema}.topic_queue_current"
+    ).collect()[0]["n"]
+    print(f"topic queue: {n} request(s) waiting")
+
 
 if __name__ == "__main__":
     main()
