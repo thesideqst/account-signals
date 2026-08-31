@@ -46,3 +46,10 @@ resources:
               - "{{job.parameters.catalog}}"
               - "{{job.parameters.schema}}"
               - "{{job.parameters.llm_endpoint}}"
+
+      # 20:00 ET, weekdays. Runs after the working day so a rep's answers from
+      # today are graded and their gaps are ready for tomorrow's cold open.
+      schedule:
+        quartz_cron_expression: '0 0 20 ? * MON-FRI'
+        timezone_id: America/New_York
+        pause_status: UNPAUSED

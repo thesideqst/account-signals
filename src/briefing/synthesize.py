@@ -56,13 +56,22 @@ def main() -> None:
     spark = SparkSession.builder.getOrCreate()
     w = WorkspaceClient()
 
-    account = "NVDA"
+    # Which account this run is for. The job fans out over the list.
+    account = sys.argv[6] if len(sys.argv) > 6 else "NVDA"
 
     # Latest quarter with an earnings call attached.
     period = spark.sql(f"""
         SELECT max(period_end) AS p
         FROM {catalog}.{schema}.silver_financial_deltas WHERE symbol = '{account}'
     """).collect()[0]["p"]
+    if period is None:
+        # No Silver for this account yet, usually because the pipeline has not
+        # rebuilt since its Bronze landed. Say so plainly rather than letting a
+        # NULL period reach SQL as the string 'None' and surface as a
+        # DateTimeException that says nothing about the real cause.
+        raise SystemExit(
+            f"no financial deltas for {account}. Run the signals pipeline "
+            f"after ingesting, then retry.")
 
     deltas = spark.sql(f"""
         SELECT metric, value, qoq_pct, yoy_pct, is_derived, prev_q_end, prev_y_end
@@ -93,6 +102,44 @@ def main() -> None:
     deltas = ([by_metric["revenue"]] if "revenue" in by_metric else []) + ranked
     print("metrics selected: " + ", ".join(r["metric"] for r in deltas))
 
+    # Mode is needed before retrieval, because what gets retrieved depends on it.
+    _sig = spark.sql(f"""
+        SELECT mode FROM {catalog}.{schema}.silver_daily_signals
+        WHERE symbol = '{account}' AND signal_date = (
+            SELECT max(signal_date) FROM {catalog}.{schema}.silver_daily_signals
+            WHERE symbol = '{account}')
+    """).collect()
+    mode = _sig[0]["mode"] if _sig else "C"
+    if force_mode:
+        mode = force_mode
+        print(f"mode forced to {mode} by request")
+
+    # On a quiet day the rep's queue picks the subject. Without this Mode C has
+    # nothing to deep-dive on and the model chooses from its own knowledge,
+    # which is the one thing the grounding rule exists to prevent.
+    requested_topic = force_topic
+    if mode == "C" and not requested_topic:
+        try:
+            q = spark.sql(f"""
+                SELECT topic FROM {catalog}.{schema}.topic_queue_current
+                WHERE account_id = '{account}'
+                ORDER BY requested_at ASC LIMIT 1
+            """).collect()
+            if q:
+                requested_topic = q[0]["topic"]
+                print(f"mode C subject from the queue: {requested_topic[:80]}")
+            else:
+                print("mode C with an empty queue - no requested subject")
+        except Exception as e:
+            print(f"  topic queue unavailable: {type(e).__name__}")
+
+    # A deep dive is about how something works, not about the quarter. Handing
+    # it five metrics and a page of margin arithmetic is why it kept turning
+    # into an earnings recap: the model uses what it is given.
+    if mode == "C":
+        deltas = [r for r in deltas if r["metric"] == "revenue"]
+        print("mode C: financials trimmed to revenue only, for scale")
+
     delta_lines = []
     for r in deltas:
         f = lambda x: "not available" if x is None else f"{x * 100:+.1f}%"
@@ -114,18 +161,6 @@ def main() -> None:
                 f"year over year {f(r['yoy_pct'])}."
             )
 
-    # Mode is needed before retrieval, because what gets retrieved depends on it.
-    _sig = spark.sql(f"""
-        SELECT mode FROM {catalog}.{schema}.silver_daily_signals
-        WHERE symbol = '{account}' AND signal_date = (
-            SELECT max(signal_date) FROM {catalog}.{schema}.silver_daily_signals
-            WHERE symbol = '{account}')
-    """).collect()
-    mode = _sig[0]["mode"] if _sig else "C"
-    if force_mode:
-        mode = force_mode
-        print(f"mode forced to {mode} by request")
-
     # The computed "so what": margins, basis-point moves, growth relationships.
     # Handed to the model already calculated so it explains rather than derives.
     ctx = spark.sql(f"""
@@ -138,7 +173,7 @@ def main() -> None:
     # It read the magnitude and guessed the direction. So the direction is
     # stated in words here and the model is never asked to apply a sign rule.
     context_lines = []
-    if ctx:
+    if ctx and mode != "C":
         c = ctx[0].asDict()
 
         def line(key, template_pos, template_neg, fmt=".1f"):
@@ -229,9 +264,12 @@ def main() -> None:
             WHERE symbol = '{account}')
     """).collect()
     if sig:
-        mode, mode_reason = sig[0]["mode"], sig[0]["mode_reason"] or "signals present"
+        # mode was already resolved above, including any forced override.
+        # Reassigning it here is what made "generate now" silently produce an
+        # ordinary Mode B episode: the force was applied and then thrown away.
+        mode_reason = sig[0]["mode_reason"] or "signals present"
     else:
-        mode, mode_reason = "C", "no signals on record for this account"
+        mode_reason = "no signals on record for this account"
     if force_topic:
         mode_reason = f"requested: {force_topic[:120]}"
     print(f"mode {mode} - {mode_reason}")
@@ -284,13 +322,30 @@ def main() -> None:
 
     # Then industry context. These are not account-specific, so they are capped
     # at recent items rather than everything the feeds have ever published.
+    # For a requested deep dive, pull what is ABOUT the subject rather than
+    # whatever happens to be recent. Keyword matching is crude - this is the
+    # job Vector Search exists for, and the endpoint is already provisioned -
+    # but "most recent 10" gave a CoWoS episode whatever McKinsey published
+    # last week, which is worse than crude.
+    topic_filter = ""
+    if requested_topic:
+        words = [w.lower().strip(".,()") for w in requested_topic.split()
+                 if len(w) > 4][:8]
+        if words:
+            likes = " OR ".join(
+                f"lower(chunk_text) LIKE '%{w}%'" for w in words)
+            topic_filter = f"AND ({likes})"
+
     trend_rows = spark.sql(f"""
         SELECT publisher, headline, chunk_text, published_at
         FROM {catalog}.{schema}.silver_doc_chunks
-        WHERE source_type = 'industry_trend'
-          AND published_at >= date_sub(current_date(), 45)
-        ORDER BY published_at DESC LIMIT 10
+        WHERE source_type IN ('industry_trend', 'news')
+          AND published_at >= date_sub(current_date(), 120)
+          {topic_filter}
+        ORDER BY published_at DESC LIMIT {14 if requested_topic else 10}
     """).collect()
+    if requested_topic and not trend_rows:
+        print("mode C: nothing in the sources matches the requested subject")
     # Publication and headline travel with every item so the script can say
     # where a claim came from instead of "a recent report".
     trend_lines = [
@@ -326,25 +381,6 @@ def main() -> None:
                "bear on it:\n" + "\n".join(trend_lines) if trend_lines else "")
         )
     print(f"macro: {len(macro_lines)} series, {len(trend_lines)} trend items")
-
-    # On a quiet day the rep's queue picks the subject. Without this Mode C has
-    # nothing to deep-dive on and the model chooses from its own knowledge,
-    # which is the one thing the grounding rule exists to prevent.
-    requested_topic = force_topic
-    if mode == "C" and not requested_topic:
-        try:
-            q = spark.sql(f"""
-                SELECT topic FROM {catalog}.{schema}.topic_queue_current
-                WHERE account_id = '{account}'
-                ORDER BY requested_at ASC LIMIT 1
-            """).collect()
-            if q:
-                requested_topic = q[0]["topic"]
-                print(f"mode C subject from the queue: {requested_topic[:80]}")
-            else:
-                print("mode C with an empty queue - no requested subject")
-        except Exception as e:
-            print(f"  topic queue unavailable: {type(e).__name__}")
 
     prompt = prompts.build(
         mode=mode,

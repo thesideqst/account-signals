@@ -81,6 +81,32 @@ resources:
               - "{{job.parameters.catalog}}"
               - "{{job.parameters.schema}}"
 
+      # Bronze -> Silver runs here rather than on its own clock, so it only
+      # rebuilds once new Bronze has actually landed. Without this the schedule
+      # would refresh the raw data and leave every derived table stale, which
+      # is the failure that looks most like everything working.
+      # (task appended below)
+
+      # 05:00 ET on weekdays. Chosen against when the sources actually change:
+      # SEC filings land after the close the evening before, earnings calls are
+      # held after hours, and overnight news is in the feeds by dawn. Running
+      # before the market opens means the rep's commute briefing reflects
+      # everything that happened while they were asleep.
+      #
+      # Weekdays only: nothing files on a Saturday, and pulling anyway just
+      # burns free-tier quota that the weekday runs need.
+        - task_key: build_silver
+          depends_on:
+            - task_key: edgar_xbrl
+            - task_key: transcripts
+            - task_key: news
+            - task_key: analyst_ratings
+            - task_key: industry_trends
+            - task_key: macro
+          pipeline_task:
+            pipeline_id: ${resources.pipelines.signals.id}
+
       schedule:
-        quartz_cron_expression: '0 0 5 * * ?'
+        quartz_cron_expression: '0 0 5 ? * MON-FRI'
         timezone_id: America/New_York
+        pause_status: UNPAUSED

@@ -81,6 +81,48 @@ def main() -> None:
     """)
     print(f"refreshed view {catalog}.{schema}.recall_recaps_current")
 
+    # The comprehension answers come back the same way. This is the table the
+    # app actually writes to now - it was added after recall_recaps and was not
+    # wired into the write-back, so answers were sitting in Postgres and never
+    # reaching Unity Catalog.
+    answers_target = f"{catalog}.{schema}.bronze_recap_answers"
+    spark.sql(f"""
+        CREATE TABLE IF NOT EXISTS {answers_target} (
+            answer_id      BIGINT,
+            briefing_id    STRING,
+            account_id     STRING,
+            rep_id         STRING,
+            question_index INT,
+            question       STRING,
+            answer         STRING,
+            score          INT,
+            verdict        STRING,
+            missed         STRING,
+            answered_at    TIMESTAMP,
+            _synced_at     TIMESTAMP
+        )
+    """)
+    a_hwm = spark.sql(
+        f"SELECT coalesce(max(answer_id), 0) AS hwm FROM {answers_target}"
+    ).collect()[0]["hwm"]
+    spark.sql(f"""
+        INSERT INTO {answers_target}
+        SELECT answer_id, briefing_id, account_id, rep_id, question_index,
+               question, answer, score, verdict, missed, answered_at,
+               current_timestamp() AS _synced_at
+        FROM {LAKEBASE_CATALOG}.app.recap_answers
+        WHERE answer_id > {a_hwm}
+    """)
+    a_total = spark.sql(f"SELECT count(*) AS n FROM {answers_target}").collect()[0]["n"]
+    print(f"answers watermark was {a_hwm}; {answers_target} now holds {a_total}")
+
+    spark.sql(f"""
+        CREATE OR REPLACE VIEW {catalog}.{schema}.recap_answers_current AS
+        SELECT answer_id, briefing_id, account_id, rep_id, question_index,
+               question, answer, score, verdict, missed, answered_at, _synced_at
+        FROM {answers_target}
+    """)
+
     # The topic queue comes back the same way. On a quiet day it is what the
     # episode is about, so Mode C stops having to invent a subject.
     spark.sql(f"""

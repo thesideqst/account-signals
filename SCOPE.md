@@ -27,7 +27,7 @@ A daily ~10-minute audio briefing per account that synthesizes real financial de
 
 - Live conversational Q&A voice agent (real-time STT, retrieval, and TTS loop)
 - Paywalled analyst/research data (FactSet, Bloomberg, Gartner, TSIA, CB Insights API tier) — use freely available and RSS-automatable sources only
-- More than 2-3 accounts for v1
+- More than 2-3 accounts for v1 — 2026-08-30: three live (NVDA, GOOG, MU)
 - Pattern analysis of a rep's missed points across multiple sessions — gold re-run uses only the gaps from the single most recent graded recap, applied once, not a running history across sessions
 - Recall recaps use test/synthetic data only (not real colleague or customer conversations)
 
@@ -328,3 +328,7 @@ tooling, and phase 2 is fully scriptable.
 - 2026-08-30 — Every non-filing source now carries its publication and headline into the prompt, and the script must name both. "A recent report" is banned: an unattributed claim is one the listener cannot check, which in a briefing built on traceable sources is the one thing that cannot be sloppy
 - 2026-08-30 — The one-figure-per-paragraph rule moved from MODE_A_CORE into the shared VOICE_RULES. It had been written into a single mode's core, so on a Mode B day it never applied - which is why the restructure appeared to do nothing at first
 - 2026-08-30 — Narration voice set to `ballad` with delivery instructions passed to gpt-4o-mini-tts. The instructions parameter steers pace and emphasis without changing a word of the script, and its absence was most of what made earlier versions sound synthetic
+- 2026-08-30 — Scheduled: ingest 05:00 ET weekdays, briefing 05:45, grading 20:00. The cadence follows when the sources change - filings land after the close, calls are held after hours, overnight news is in the feeds by dawn - so a 05:00 pull means the commute briefing covers everything that happened overnight. Weekdays only, because nothing files on a Saturday and pulling anyway burns free-tier quota
+- 2026-08-30 — The Bronze to Silver pipeline runs as a task inside the ingest job rather than on its own schedule. On separate clocks the raw data would refresh while every derived table stayed stale, which is the failure that looks most like everything working
+- 2026-08-30 — Schedules explicitly UNPAUSED in the dev target. `mode: development` pauses them by default, which is right for iterating and wrong for a system meant to demonstrate that it runs on its own
+- 2026-08-30 — Second and third accounts added (Alphabet, Micron), and both broke NVDA-shaped assumptions immediately: fiscal calendars differ, so asking every company for the same fiscal year and quarter 404s for most of them (now tries up to eight recent periods per account); and one symbol exhausting FMP's free tier was failing the whole ratings task rather than the other two continuing

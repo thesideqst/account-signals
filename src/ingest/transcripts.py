@@ -46,6 +46,8 @@ BASE = "https://api.roic.ai/v3.0.0"
 # Exchange-qualified, per the identifier rule above.
 ACCOUNTS = {
     "NVDA": "NASDAQ:NVDA",
+    "GOOG": "NASDAQ:GOOG",
+    "MU":   "NASDAQ:MU",
 }
 
 def roic_key() -> str:
@@ -109,14 +111,43 @@ def main() -> None:
     fy, fq = int(sys.argv[3]), int(sys.argv[4])
     key = roic_key()
 
+    # Fiscal calendars differ. NVIDIA's FY2027 Q2 is Alphabet's calendar Q2 2026
+    # and means nothing at all for Micron, whose year ends in August. Asking every
+    # company for the same fiscal coordinates 404s for most of them, so try a few
+    # recent periods per account and take the first that exists.
+    def candidates(fy, fq):
+        out = []
+        for _ in range(8):
+            out.append((fy, fq))
+            fq -= 1
+            if fq < 1:
+                fq, fy = 4, fy - 1
+        return out
+
     rows = []
     for symbol, identifier in ACCOUNTS.items():
-        payload = get(f"/earnings-calls/{identifier}", key,
-                      fiscal_year=fy, fiscal_quarter=fq)
-        turns = list(flatten(symbol, payload))
-        rows.extend(turns)
-        print(f"{symbol} FY{fy}Q{fq}: {len(turns)} turns, "
-              f"{sum(len(t['text'] or '') for t in turns):,} chars")
+        got = False
+        for cy, cq in candidates(fy, fq):
+            try:
+                payload = get(f"/earnings-calls/{identifier}", key,
+                              fiscal_year=cy, fiscal_quarter=cq)
+            except Exception as e:
+                # 404 just means that company has no call for those coordinates.
+                if getattr(e, "code", None) not in (400, 404):
+                    print(f"{symbol} FY{cy}Q{cq}: {type(e).__name__} "
+                          f"{getattr(e, 'code', '')} - trying an earlier period")
+                continue
+            turns = list(flatten(symbol, payload))
+            if not turns:
+                continue
+            rows.extend(turns)
+            print(f"{symbol} FY{cy}Q{cq}: {len(turns)} turns, "
+                  f"{sum(len(t['text'] or '') for t in turns):,} chars")
+            got = True
+            break
+        if not got:
+            # One account without a transcript is not a reason to lose the others.
+            print(f"{symbol}: no transcript found in the last eight periods")
 
     df = spark().createDataFrame(rows, schema=SCHEMA)
     bronze_write(df, catalog, schema, "transcript_turns")

@@ -108,10 +108,28 @@ def main() -> None:
     spark = SparkSession.builder.getOrCreate()
     key = dbutils.secrets.get(scope="account_signals", key="tts_api_key")
 
-    row = spark.sql(f"""
+    account = sys.argv[5] if len(sys.argv) > 5 else "NVDA"
+    rows = spark.sql(f"""
         SELECT briefing_id, account_id, period_end, script_text, word_count
         FROM {catalog}.{schema}.gold_briefing_current
-    """).collect()[0]
+        WHERE account_id = '{account}'
+    """).collect()
+    if not rows:
+        print(f"no briefing to narrate for {account}")
+        return
+    row = rows[0]
+
+    # Guard the other direction: the app refuses to start a run while one is in
+    # flight, but a scheduled run can still overlap a manual one. If the newest
+    # briefing is not the one this task's own synthesize step produced, another
+    # run overtook us - narrating now would attach this audio to a briefing that
+    # is no longer current and publish the newer episode silent.
+    expected = os.environ.get("EXPECTED_BRIEFING_ID", "")
+    if expected and row["briefing_id"] != expected:
+        print(f"another run produced a newer briefing ({row['briefing_id']}); "
+              f"this run wrote {expected}. Stopping before narration so the "
+              f"newer episode keeps its own audio.")
+        return
 
     chunks = split_for_speech(row["script_text"])
     print(f"{row['account_id']} {row['period_end']}: {row['word_count']} words "
@@ -163,9 +181,17 @@ def main() -> None:
                b.mode, b.mode_reason, b.episode_title, b.mode_label, b.takeaways, b.questions, b.lineage,
                b.script_text, b.word_count,
                a.audio_path, a.audio_bytes, a.voice
-        FROM {catalog}.{schema}.gold_briefing_current b
+        -- Every episode, not just the newest. Built from gold_briefing_current
+        -- this table held exactly one row by definition, so "past episodes"
+        -- could never show anything but today's.
+        FROM {catalog}.{schema}.gold_briefing b
         LEFT JOIN {catalog}.{schema}.gold_briefing_audio a
           ON a.briefing_id = b.briefing_id
+        -- Episodes hidden from the app stay hidden. The Unity Catalog record
+        -- survives; only the served copy drops them.
+        WHERE b.briefing_id NOT IN (
+            SELECT briefing_id FROM account_signals_pg.app.hidden_episodes
+        )
     """)
     print(f"refreshed {catalog}.{schema}.gold_briefing_serving")
 

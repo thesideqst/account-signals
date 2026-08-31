@@ -7,6 +7,9 @@ resources:
     signals:
       name: account_signals_pipeline
       serverless: true
+      # Triggered by the jobs rather than running on its own clock: Silver is
+      # only worth rebuilding once new Bronze has actually landed.
+      continuous: false
       catalog: ${var.catalog}
       schema: ${var.schema}
       libraries:

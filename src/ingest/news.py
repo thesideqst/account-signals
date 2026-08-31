@@ -32,6 +32,8 @@ YAHOO = ("https://feeds.finance.yahoo.com/rss/2.0/headline"
 # world. Both are pinned per account rather than derived from the symbol.
 ACCOUNTS = {
     "NVDA": {"ticker": "NVDA", "query": "NVIDIA"},
+    "GOOG": {"ticker": "GOOG", "query": "Alphabet+Google"},
+    "MU":   {"ticker": "MU",   "query": "Micron"},
 }
 
 import os

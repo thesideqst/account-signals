@@ -32,6 +32,13 @@ variables:
       policy requires one; requests without it are throttled or blocked.
       Set this to your own address before running the ingest.
     default: your-email@example.com
+  sync_pipeline_id:
+    description: >-
+      Pipeline behind the Lakebase synced table, created by
+      `databricks postgres create-synced-table`. Workspace-specific: find yours
+      with `databricks postgres get-synced-table <name>`. Leave blank and the
+      app simply shows the previous episode until the sync runs on its own.
+    default: fbcc82c7-e931-41b0-b268-fc6014e3d207
   lakebase_project:
     description: Lakebase Autoscaling project serving the app.
     default: account-signals-dev

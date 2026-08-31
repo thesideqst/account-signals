@@ -469,6 +469,24 @@ def generate_now(account_id: str, request_id: int = Form(...)):
     if not job_id:
         raise HTTPException(500, "BRIEFING_JOB_ID is not configured for this app")
 
+    # Refuse to start a second run while one is in flight.
+    #
+    # Two concurrent runs do not corrupt anything on their own - both append to
+    # gold_briefing, and the serving table takes the newest row per account. The
+    # damage is subtler: each run rebuilds the serving table by joining the newest
+    # briefing to the audio, so if run A narrates its own script while run B has
+    # already written a newer briefing, the join finds no audio for B and the
+    # episode publishes silent. An episode with no audio is worse than a wait.
+    active = list(workspace().jobs.list_runs(
+        job_id=int(job_id), active_only=True))
+    if active:
+        started = min((r.start_time or 0) for r in active) / 1000
+        secs = max(0, int(__import__("time").time() - started))
+        raise HTTPException(
+            409,
+            f"A briefing is already being generated for this account "
+            f"({secs // 60}m {secs % 60}s in). Wait for it to finish, then try again.")
+
     with pg() as c:
         row = c.execute(
             "SELECT topic FROM app.topic_requests WHERE request_id = %s",
@@ -485,6 +503,144 @@ def generate_now(account_id: str, request_id: int = Form(...)):
                      SET status = 'generating', used_at = now()
                      WHERE request_id = %s""", (request_id,))
     return {"run_id": run.run_id, "topic": row["topic"]}
+
+
+@app.get("/api/sources/{account_id}")
+def sources(account_id: str):
+    """Links behind the episode, so a rep can go read the original.
+
+    Read from Unity Catalog rather than Postgres: the chunks are analytical
+    data and were never synced to the serving copy, which only carries what a
+    page load needs.
+    """
+    wh = os.environ.get("DATABRICKS_WAREHOUSE_ID", "")
+    if not wh:
+        return []
+    try:
+        r = workspace().statement_execution.execute_statement(
+            warehouse_id=wh, wait_timeout="30s",
+            statement=f"""
+                SELECT DISTINCT publisher, headline, url, source_type,
+                       cast(published_at AS string) AS published_at
+                FROM {CATALOG}.{SCHEMA}.silver_doc_chunks
+                WHERE url IS NOT NULL AND headline IS NOT NULL
+                  AND (account_id = '{account_id}' OR account_id = '_industry')
+                  AND published_at >= date_sub(current_date(), 30)
+                ORDER BY published_at DESC LIMIT 25
+            """)
+        if not r.result or (r.status.state.value if r.status else "") != "SUCCEEDED":
+            return []
+        return [{"publisher": v[0], "headline": v[1], "url": v[2],
+                 "source_type": v[3], "published_at": v[4]}
+                for v in (r.result.data_array or [])]
+    except Exception:
+        return []
+
+
+@app.get("/api/roundtrip/{account_id}")
+def roundtrip(account_id: str):
+    """Both ends of the write-back, side by side.
+
+    The claim this project makes is that data goes out to Lakebase for fast
+    reads and comes back to Unity Catalog for analysis. That is invisible if you
+    only ever look at one side, so this reads BOTH: the answers as they sit in
+    Postgres, and the same answers after they have been brought back into Unity
+    Catalog through Lakehouse Federation.
+
+    Unity Catalog is queried over the Statement Execution API rather than a
+    Postgres connection - the app can reach both, and that is the point.
+    """
+    out = {"postgres": None, "unity_catalog": None, "lag": None}
+    try:
+        with pg() as c:
+            row = c.execute("""
+                SELECT count(*) AS n, max(answered_at) AS newest
+                FROM app.recap_answers WHERE account_id = %s
+            """, (account_id,)).fetchone()
+        out["postgres"] = {"answers": row["n"],
+                           "newest": str(row["newest"]) if row["newest"] else None}
+    except Exception as e:
+        out["postgres"] = {"error": f"{type(e).__name__}"}
+
+    wh = os.environ.get("DATABRICKS_WAREHOUSE_ID", "")
+    if not wh:
+        out["unity_catalog"] = {"error": "no warehouse configured"}
+        return out
+    try:
+        r = workspace().statement_execution.execute_statement(
+            warehouse_id=wh, wait_timeout="30s",
+            statement=f"""
+                SELECT count(*), max(answered_at), max(_synced_at)
+                FROM {CATALOG}.{SCHEMA}.bronze_recap_answers
+                WHERE account_id = '{account_id}'
+            """)
+        # r.result is None whenever the statement did not actually return rows -
+        # still running, or failed. Reading .data_array straight off it turns a
+        # useful server message into "NoneType has no attribute data_array".
+        state = r.status.state.value if r.status and r.status.state else "UNKNOWN"
+        if state != "SUCCEEDED" or r.result is None:
+            msg = ""
+            if r.status and r.status.error:
+                msg = r.status.error.message or ""
+            if state == "PENDING":
+                msg = "the warehouse is still starting up - try again in a moment"
+            out["unity_catalog"] = {"error": f"{state}: {msg[:180]}" if msg else state}
+            return out
+        vals = (r.result.data_array or [[0, None, None]])[0]
+        out["unity_catalog"] = {"answers": int(vals[0] or 0),
+                                "newest": vals[1], "last_synced": vals[2]}
+        pending = (out["postgres"].get("answers", 0) or 0) - int(vals[0] or 0)
+        out["lag"] = max(0, pending)
+    except Exception as e:
+        out["unity_catalog"] = {"error": f"{type(e).__name__}: {str(e)[:120]}"}
+    return out
+
+
+@app.get("/api/answers/{briefing_id}")
+def answers_for(briefing_id: str):
+    """Answers already given for one episode, so a refresh does not lose them."""
+    with pg() as c:
+        return c.execute("""
+            SELECT question_index, question, answer, score, verdict, missed,
+                   answered_at
+            FROM app.recap_answers WHERE briefing_id = %s
+            ORDER BY question_index, answered_at
+        """, (briefing_id,)).fetchall()
+
+
+@app.get("/api/run/{run_id}")
+def run_status(run_id: int):
+    """Where a generation run has got to.
+
+    The job takes three to four minutes, so the page polls this rather than
+    leaving the rep to refresh blindly. Task-level state is included because
+    "writing the script" and "recording the audio" are worth telling apart when
+    you are staring at a spinner.
+    """
+    try:
+        run = workspace().jobs.get_run(run_id=run_id)
+    except Exception as e:
+        raise HTTPException(500, f"could not read run: {type(e).__name__}")
+
+    state = run.state.result_state.value if run.state and run.state.result_state else None
+    life = run.state.life_cycle_state.value if run.state and run.state.life_cycle_state else None
+
+    # Report the task that is currently running, in words a person recognises.
+    STEP = {"retrieve": "Gathering the sources",
+            "synthesize": "Writing the script",
+            "narrate": "Recording the audio"}
+    step = None
+    for t in (run.tasks or []):
+        ls = t.state.life_cycle_state.value if t.state and t.state.life_cycle_state else ""
+        if ls == "RUNNING":
+            step = STEP.get(t.task_key, t.task_key)
+            break
+        if ls in ("PENDING", "QUEUED") and step is None:
+            step = "Starting up"
+
+    done = life == "TERMINATED"
+    return {"done": done, "ok": state == "SUCCESS", "state": state or life,
+            "step": step or ("Finishing up" if done else "Starting up")}
 
 
 @app.get("/api/episode/{briefing_id}")
@@ -506,6 +662,29 @@ def episode(briefing_id: str):
             ORDER BY question_index, answered_at
         """, (briefing_id,)).fetchall()
     return row
+
+
+@app.delete("/api/episode/{briefing_id}")
+def delete_episode(briefing_id: str):
+    """Hide an episode from the app.
+
+    Deletes from the Lakebase copy only. The Unity Catalog record stays: it is
+    the source of truth and the audit trail, and a demo tidy-up is not a reason
+    to destroy history. The next sync would restore this row, which is the right
+    behaviour for real data and the wrong one for test data - so deletions are
+    also recorded so the sync can skip them.
+    """
+    with pg() as c:
+        c.execute("""
+            CREATE TABLE IF NOT EXISTS app.hidden_episodes (
+                briefing_id text PRIMARY KEY,
+                hidden_at   timestamptz NOT NULL DEFAULT now())
+        """)
+        c.execute("INSERT INTO app.hidden_episodes (briefing_id) VALUES (%s) "
+                  "ON CONFLICT DO NOTHING", (briefing_id,))
+        n = c.execute("DELETE FROM app.gold_briefing_serving WHERE briefing_id = %s",
+                      (briefing_id,)).rowcount
+    return {"deleted": n, "briefing_id": briefing_id}
 
 
 @app.get("/api/audio-by-id/{briefing_id}")

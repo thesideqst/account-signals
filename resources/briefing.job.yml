@@ -34,37 +34,43 @@ resources:
         # Created by `databricks postgres create-synced-table`; differs per
         # workspace. Leave blank and the Lakebase copy simply is not refreshed.
         - name: sync_pipeline_id
-          default: ""
+          default: ${var.sync_pipeline_id}
         # Set by the app when a rep asks for a queued topic right now, rather
         # than waiting for a quiet day.
         - name: force_mode
           default: ""
         - name: force_topic
           default: ""
+        # Which account this run covers. One run per account; the scheduled
+        # briefing runs for the default and the others are triggered per account.
+        - name: account
+          default: "NVDA"
 
       tasks:
-        # Pull the structured deltas + the most relevant prose chunks per account.
-        # Retrieval keeps the prompt small and the claims traceable.
+        # Pull the structured deltas plus the prose that matters for this mode.
         - task_key: retrieve
           environment_key: briefing_env
           spark_python_task:
             python_file: ../src/briefing/retrieve.py
 
-        # Compose the ~10-min script. Reads yesterday's grading gaps as of the
-        # previous run, which is what keeps the callback loop acyclic.
+        # Choose the mode, then write the script. force_mode and force_topic let
+        # the app turn a queued topic into an episode without waiting for a quiet
+        # day; both are empty on a normal scheduled run.
         - task_key: synthesize
           depends_on:
             - task_key: retrieve
           environment_key: briefing_env
           spark_python_task:
             python_file: ../src/briefing/synthesize.py
-            source: WORKSPACE
             parameters:
               - "{{job.parameters.catalog}}"
               - "{{job.parameters.schema}}"
               - "{{job.parameters.llm_endpoint}}"
+              - "{{job.parameters.force_mode}}"
+              - "{{job.parameters.force_topic}}"
+              - "{{job.parameters.account}}"
 
-        # External TTS API -> MP3 into the UC Volume. Gold keeps the path.
+        # External TTS -> MP3 into the UC Volume, then refresh what the app reads.
         - task_key: narrate
           depends_on:
             - task_key: synthesize
@@ -76,7 +82,12 @@ resources:
               - "{{job.parameters.schema}}"
               - "{{job.parameters.tts_speed}}"
               - "{{job.parameters.sync_pipeline_id}}"
+              - "{{job.parameters.account}}"
 
+      # 05:45 ET, weekdays: 45 minutes after ingest starts, which is comfortably
+      # longer than the ~4 minutes a briefing takes plus the ingest itself. Late
+      # enough that the data is in, early enough for a 6am commute.
       schedule:
-        quartz_cron_expression: '0 30 5 * * ?'
+        quartz_cron_expression: '0 45 5 ? * MON-FRI'
         timezone_id: America/New_York
+        pause_status: UNPAUSED

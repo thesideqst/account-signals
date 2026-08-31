@@ -195,18 +195,28 @@ works, not just that it occurred.
 If the financial impact is not yet visible in the reported numbers, say so plainly rather
 than implying it is. A headline is not a result."""
 
-MODE_C_CORE = """It is a quiet day, so this is a deep dive - the most valuable use of a
-day with no news.
+MODE_C_CORE = """This is a deep dive. It is not an earnings episode and it is not a news
+episode. Nobody is asking what the quarter did.
 
-Say plainly at the top that the tape is quiet and that this is a chance to go deeper.
-Then teach one structural thing about this account that changes how a rep sells to them:
-how a bottleneck actually works, where the moat comes from, how their customers'
-buying process is shaped by their supply chain.
+TEACH A MECHANISM. The whole episode explains ONE thing about how this business works -
+how a bottleneck actually functions, where a moat comes from, why a customer's buying
+process is shaped the way it is. The test is whether the rep could explain it back to a
+colleague afterwards without notes.
 
-Break it into steps. Use analogies. Walk through the physical or business process in
-order. The test is whether the rep could explain it back to a colleague afterwards.
-Finish by connecting the structure to the sale: because this is how the business works,
-here is what the customer cares about."""
+Walk the process in order, step by step, the way you would draw it on a whiteboard. What
+goes in, what happens to it, what comes out, and where it jams. Use analogies to everyday
+things throughout - a kitchen, a motorway, a queue at a counter. The analogy is not
+decoration here; it is how the idea gets across.
+
+NUMBERS ARE NEARLY IRRELEVANT TO THIS EPISODE. You have been given revenue only, for a
+sense of scale, and you should use it perhaps once. If you find yourself reciting growth
+rates or margins you have drifted back into an earnings recap, which is exactly what this
+episode is not. A listener who wanted the numbers would play a different episode.
+
+If the sources genuinely do not explain the mechanism, say so plainly in one sentence and
+teach the closest thing they do cover. Never fill the gap from memory - a confident
+explanation of something you were not told is the one failure this briefing cannot
+survive, because the rep will repeat it to a customer."""
 
 
 MODES = {
@@ -228,7 +238,7 @@ Today's mode is {mode} ({mode_name}). Target {words} words.
 
 
 # Tickers are for screens. A briefing is spoken, so it needs the spoken name.
-COMPANY_NAMES = {"NVDA": "NVIDIA"}
+COMPANY_NAMES = {"NVDA": "NVIDIA", "GOOG": "Alphabet", "MU": "Micron"}
 
 
 def build(mode: str, account: str, deltas: str, framing: str, context: str = "",
@@ -275,6 +285,17 @@ def build(mode: str, account: str, deltas: str, framing: str, context: str = "",
         "No macro or industry sources are wired up yet. Skip this phase rather than "
         "inventing market context, and give its time to the core analysis instead."
     )
+
+    # A deep dive opens on the idea, not the quarter. The standard cold open
+    # pulls in the company's results, which on a Mode C day is the one thing
+    # the episode is not about.
+    if mode == "C":
+        callback_instruction += (
+            "\n\nThis is a deep dive, so open on the SUBJECT, not the results. Name the "
+            "company and go straight into the thing you are explaining. Do not open with "
+            "revenue, growth or margins - a listener who wanted the quarter would have "
+            "played a different episode."
+        )
 
     phases = PHASES.format(
         callback_instruction=callback_instruction,

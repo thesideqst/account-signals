@@ -36,9 +36,12 @@ import urllib.request
 
 BASE = "https://data.sec.gov/api/xbrl/companyfacts/CIK{cik}.json"
 
-# Vertical slice: one account, end to end, before breadth (SCOPE.md build order).
+# Three accounts. Alphabet and Micron are here to break NVDA-shaped assumptions:
+# different concept tags, different fiscal calendars, different call formats.
 ACCOUNTS = {
-    "NVDA": "0001045810",
+    "NVDA": "0001045810",   # NVIDIA
+    "GOOG": "0001652044",   # Alphabet
+    "MU":   "0000723125",   # Micron
 }
 
 # SEC requires a real contact address. Supplied as the third task parameter on

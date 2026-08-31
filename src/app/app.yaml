@@ -14,6 +14,10 @@ env:
   # Lets the app run the briefing job on demand for a queued topic.
   - name: BRIEFING_JOB_ID
     value: '175641655518601'
+  # Lets the app read Unity Catalog as well as Postgres, so the write-back can
+  # be shown from both ends.
+  - name: DATABRICKS_WAREHOUSE_ID
+    value: c183f02d121f496a
   - name: LAKEBASE_ENDPOINT
     value: projects/account-signals-dev/branches/production/endpoints/primary
   # Lakebase injects PGHOST / PGDATABASE / PGUSER / PGPASSWORD / PGPORT when a

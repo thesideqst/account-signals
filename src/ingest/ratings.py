@@ -40,7 +40,7 @@ import sys
 
 BASE = "https://financialmodelingprep.com/stable"
 
-ACCOUNTS = {"NVDA": "NVDA"}
+ACCOUNTS = {"NVDA": "NVDA", "GOOG": "GOOG", "MU": "MU"}
 
 GRADES_SCHEMA = """
     symbol string, rating_date string, grading_company string,
@@ -79,6 +79,10 @@ def main() -> None:
 
     grades, summaries = [], []
     for symbol, ticker in ACCOUNTS.items():
+      # One symbol hitting a tier limit should not cost the other two their
+      # data. FMP returns 402 once the free plan's ceiling is reached, and it
+      # can happen partway through the list.
+      try:
         for rec in get("grades", key, symbol=ticker) or []:
             grades.append({
                 "symbol": symbol,
@@ -97,6 +101,10 @@ def main() -> None:
                 "consensus": rec.get("consensus"),
             })
         print(f"{symbol}: {len(grades)} grade actions, {len(summaries)} consensus rows")
+      except Exception as e:
+        code = getattr(e, "code", "")
+        note = " (free tier limit)" if code == 402 else ""
+        print(f"{symbol}: FAILED {type(e).__name__} {code}{note} - continuing")
 
     if grades:
         bronze_write(spark().createDataFrame(grades, schema=GRADES_SCHEMA),
