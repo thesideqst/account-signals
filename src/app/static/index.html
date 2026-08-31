@@ -29,6 +29,39 @@
   .src em{display:block;font-style:normal;color:var(--soft);font-size:11.5px;margin-top:3px}
   .why{color:var(--soft);font-size:12.8px;line-height:1.55;margin:0 0 14px}
   .layerwhy{color:var(--soft);font-size:12.3px;line-height:1.5;margin:4px 0 2px}
+  /* tabs */
+  .tabs{display:flex;gap:4px;margin-bottom:16px;flex-wrap:wrap;
+        border-bottom:1px solid var(--line);padding-bottom:0}
+  .tab{padding:9px 14px;font-size:13.5px;color:var(--soft);cursor:pointer;
+       border-bottom:2px solid transparent;margin-bottom:-1px;white-space:nowrap}
+  .tab:hover{color:var(--ink)}
+  .tab.on{color:var(--accent);border-bottom-color:var(--accent);font-weight:600}
+  .tab .n{font-size:11px;opacity:.75;margin-left:5px}
+  .pane{display:none}
+  .pane.on{display:block}
+  /* the medallion, drawn rather than tabulated */
+  .flow{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin:16px 0 6px}
+  @media (max-width:760px){.flow{grid-template-columns:1fr}}
+  .stage{background:var(--card2);border:1px solid var(--line);border-radius:9px;
+         padding:14px;position:relative}
+  .stage.bronze{border-top:3px solid #b07d4a}
+  .stage.silver{border-top:3px solid #9fb0bd}
+  .stage.gold{border-top:3px solid var(--accent)}
+  .stage h4{margin:0 0 3px;font-size:12px;letter-spacing:.08em;text-transform:uppercase}
+  .stage .big{font-size:24px;font-weight:700;font-variant-numeric:tabular-nums;
+              line-height:1.1;margin:6px 0 2px}
+  .stage .cap{color:var(--soft);font-size:11.8px;line-height:1.45}
+  .rows{margin-top:10px;font-size:12px}
+  .rowline{display:flex;justify-content:space-between;gap:8px;padding:3px 0;
+           color:#c8d3da;border-bottom:1px solid #202930}
+  .rowline em{font-style:normal;color:var(--soft)}
+  .arrow{text-align:center;color:var(--soft);font-size:18px;line-height:1}
+  /* write-back, as two boxes and a link */
+  .wb{display:grid;grid-template-columns:1fr auto 1fr;gap:12px;align-items:center;
+      margin-top:14px}
+  @media (max-width:760px){.wb{grid-template-columns:1fr}}
+  .wbbox{background:var(--card2);border:1px solid var(--line);border-radius:9px;padding:14px}
+  .wbbox .big{font-size:26px;font-weight:700;font-variant-numeric:tabular-nums}
   h1{font-size:14px;letter-spacing:.18em;text-transform:uppercase;color:var(--soft);
      font-weight:600;margin:0 0 28px}
   .card{background:var(--card);border:1px solid var(--line);border-radius:10px;
@@ -96,8 +129,12 @@
     <div class="card"><h3>Accounts</h3><div id="accts">…</div></div>
   </div>
   <div>
-    <div id="app" class="card">Loading…</div>
-    <div id="extras"></div>
+    <div class="tabs" id="tabs"></div>
+    <div class="pane on" id="pane-episode"><div id="app" class="card">Loading…</div></div>
+    <div class="pane" id="pane-quiz"></div>
+    <div class="pane" id="pane-data"></div>
+    <div class="pane" id="pane-topics"></div>
+    <div class="pane" id="pane-episodes"></div>
   </div>
   <div class="rail rail-right">
     <div class="card"><h3>Sources</h3>
@@ -156,7 +193,6 @@ async function loadSources() {
 async function load() {
   const app = $("#app");
   app.innerHTML = "Loading…";
-  $("#extras").innerHTML = "";
   try {
     const res = await fetch(`/api/briefing/${ACCT}`);
     const b = await res.json();
@@ -182,13 +218,19 @@ async function load() {
       ${list(parse(b.takeaways, []))}
       <audio controls preload="none" src="/api/audio/${ACCT}"></audio>
       <details><summary>Read the transcript</summary><div id="script"></div></details>
-      <div class="qs" id="qs"></div>`;
+`;
     $("#script").textContent = b.script_text;
 
     renderQuestions(parse(b.questions, []));
-    renderExtras(lineage);
+    renderTabs();
+    renderData(lineage);
+    renderTopics();
+    renderEpisodes();
   } catch (e) {
+    // Surface the real cause. A JS error here used to leave the page sitting on
+    // "Loading..." with nothing in the UI to say why.
     app.innerHTML = `<span class="err">Could not load: ${e.message}</span>`;
+    console.error(e);
   }
 }
 
@@ -200,10 +242,33 @@ const list = (items) => items.length
   ? `<ul class="take">${items.map(t => `<li>${t}</li>`).join("")}</ul>` : "";
 
 // ---------- comprehension questions, graded as soon as you answer ----------
+const TABS = [
+  ["episode",  "This episode"],
+  ["quiz",     "Quiz"],
+  ["data",     "Data summary"],
+  ["topics",   "Queued topics"],
+  ["episodes", "Other episodes"],
+];
+function renderTabs(active = "episode") {
+  $("#tabs").innerHTML = TABS.map(([id, label]) =>
+    `<div class="tab ${id === active ? "on" : ""}" data-t="${id}">${label}</div>`).join("");
+  $("#tabs").querySelectorAll(".tab").forEach(t => t.onclick = () => showTab(t.dataset.t));
+  showTab(active);
+}
+function showTab(id) {
+  document.querySelectorAll(".tab").forEach(t => t.classList.toggle("on", t.dataset.t === id));
+  document.querySelectorAll(".pane").forEach(p => p.classList.toggle("on", p.id === `pane-${id}`));
+  if (id === "data") loadRoundtrip();
+}
+
 function renderQuestions(questions) {
-  const wrap = $("#qs");
-  if (!questions.length) { wrap.innerHTML = ""; return; }
-  wrap.innerHTML = `<h3>Three questions</h3>
+  const wrap = $("#pane-quiz");
+  if (!questions.length) {
+    wrap.innerHTML = `<div class="card" style="color:var(--soft)">
+      No questions on this episode.</div>`;
+    return;
+  }
+  wrap.innerHTML = `<div class="card"><h3>Three questions</h3>
     <p class="sub">Answer out loud. Each one is graded the moment you finish.</p>
     ${questions.map((q, i) => `
       <div class="q" data-i="${i}">
@@ -221,7 +286,7 @@ function renderQuestions(questions) {
     <div class="qrow" style="margin-top:16px">
       <input type="text" id="topic" placeholder="Something else you want covered? Add it to the queue">
       <button class="ghost" id="addtopic">Add topic</button>
-    </div>`;
+    </div></div>`;
 
   questions.forEach((q, i) => wireAnswer(wrap.querySelector(`.q[data-i="${i}"]`), q, i));
   restoreAnswers();
@@ -329,52 +394,93 @@ async function postTopic(topic, origin) {
 }
 
 // ---------- lineage, freshness, queue, past episodes ----------
-function renderExtras(lineage) {
+function renderData(lineage) {
   const bronze = lineage.bronze || [], silver = lineage.silver || [];
-  $("#extras").innerHTML = `
+  const gold = lineage.gold || {};
+  const bronzeRows = bronze.reduce((n, r) => n + (r.rows || 0), 0);
+  const silverUsed = silver.reduce((n, r) => n + (r.used || 0), 0);
+  const oldest = bronze.map(r => r.last_ingested).filter(Boolean).sort()[0];
+
+  $("#pane-data").innerHTML = `
     <div class="card">
       <h3>Where this episode came from</h3>
-      <p class="why">The data moves through three stages. Each exists because the
-        stage before it would be the wrong place to do the next job.</p>
-      <div class="layer">BRONZE — exactly what the sources said</div>
-      <p class="layerwhy">Filings, call transcripts, headlines and interest-rate data,
-        stored as they arrived and never edited. Kept raw so that when a provider
-        changes their format we can re-read what they sent rather than re-download
-        years of history. This is the undo button.</p>
-      <table><thead><tr><th>Source</th><th>Rows</th><th>Last pulled</th></tr></thead>
-        <tbody>${bronze.map(r => {
-          const a = fmtAge(r.last_ingested);
-          return `<tr><td>${r.source}</td><td>${(r.rows ?? 0).toLocaleString()}</td>
-                  <td style="color:${a.stale ? "var(--warm)" : "var(--soft)"}">${a.text}</td></tr>`;
-        }).join("")}</tbody></table>
-      <div class="layer" style="margin-top:18px">SILVER — the arithmetic</div>
-      <p class="layerwhy">Where the numbers are actually worked out: how much revenue
-        moved, whether margins widened, whether costs outran sales. Done here in SQL
-        rather than by the model, because arithmetic should be arithmetic. The model
-        is handed the answers and asked to explain them.</p>
-      <table><thead><tr><th>Table</th><th>Used</th><th>What for</th></tr></thead>
-        <tbody>${silver.map(r =>
-          `<tr><td>${r.table}</td><td>${r.used ?? 0}</td><td>${r.note || ""}</td></tr>`).join("")}</tbody></table>
-      <div class="layer" style="margin-top:18px">GOLD — this episode</div>
-      <p class="layerwhy">One finished thing per account per day: the script, the audio,
-        the questions. Nothing downstream needs to know how it was made.</p>
-      <table><tbody>
-        <tr><td>Mode</td><td>${(lineage.gold || {}).mode || "—"} — ${(lineage.gold || {}).mode_reason || ""}</td></tr>
-        <tr><td>Model</td><td>${(lineage.gold || {}).model || "—"}</td></tr>
-        <tr><td>Prompt size</td><td>${((lineage.gold || {}).prompt_chars || 0).toLocaleString()} characters</td></tr>
-      </tbody></table>
+      <p class="why">Three stages. Each exists because the one before it would be
+        the wrong place to do the next job.</p>
+
+      <div class="flow">
+        <div class="stage bronze">
+          <h4 style="color:#b07d4a">Bronze</h4>
+          <div class="big">${bronzeRows.toLocaleString()}</div>
+          <div class="cap">rows collected, stored exactly as the sources sent them.
+            Never edited, so a provider changing format means re-reading what we
+            already have rather than re-downloading years of history.</div>
+          <div class="rows">${bronze.map(r => `
+            <div class="rowline"><span>${r.source}</span>
+              <em>${(r.rows ?? 0).toLocaleString()} · ${fmtAge(r.last_ingested).text}</em></div>`).join("")}</div>
+        </div>
+        <div class="stage silver">
+          <h4 style="color:#9fb0bd">Silver</h4>
+          <div class="big">${silverUsed.toLocaleString()}</div>
+          <div class="cap">pieces of evidence used in this episode. This is where the
+            arithmetic happens — how much moved, whether margins widened, whether costs
+            outran sales. Done in SQL, not by the model, so the model explains numbers
+            rather than producing them.</div>
+          <div class="rows">${silver.map((r, i) => `
+            <div class="rowline sv" data-i="${i}" style="cursor:pointer">
+              <span>${r.note || r.table} ${(r.items || []).length ? "▸" : ""}</span>
+              <em>${r.used ?? 0}</em></div>
+            <div class="svdetail" data-i="${i}" style="display:none;padding:6px 0 10px">
+              ${(r.items || []).length
+                ? (r.items || []).map(it => `<div style="color:#c8d3da;font-size:11.8px;
+                     padding:4px 0 4px 10px;border-left:2px solid var(--line);
+                     margin-bottom:3px">${it}</div>`).join("")
+                : `<div style="color:var(--soft);font-size:11.8px">Nothing recorded.</div>`}
+            </div>`).join("")}</div>
+        </div>
+        <div class="stage gold">
+          <h4 style="color:var(--accent)">Gold</h4>
+          <div class="big">1</div>
+          <div class="cap">finished episode: script, audio and questions. Nothing
+            downstream needs to know how it was made.</div>
+          <div class="rows">
+            <div class="rowline"><span>Mode</span><em>${gold.mode || "—"}</em></div>
+            <div class="rowline"><span>Why</span><em>${gold.mode_reason || "—"}</em></div>
+            <div class="rowline"><span>Model</span><em>${(gold.model || "—").replace("databricks-", "")}</em></div>
+            <div class="rowline"><span>Prompt</span><em>${(gold.prompt_chars || 0).toLocaleString()} chars</em></div>
+          </div>
+        </div>
+      </div>
+      <p class="layerwhy">Oldest source in this episode: ${fmtAge(oldest).text}.
+        Click any Silver row to see exactly what went in.</p>
     </div>
+
     <div class="card" id="rt"><h3>The write-back</h3>
-      <p class="sub">Your answers are written to Lakebase Postgres, then brought
-         back into Unity Catalog through Lakehouse Federation. Both ends, live.</p>
-      <div style="color:var(--soft)">Checking…</div></div>
-    <div class="card"><h3>Queued topics</h3>
-      <p class="sub">On a day with no earnings and no real news, these choose the subject.</p>
-      <ul class="queue" id="queue"><li style="color:var(--soft)">Loading…</li></ul></div>
-    <div class="card"><h3>Past episodes</h3><div id="episodes"></div></div>`;
+      <div style="color:var(--soft)">Checking…</div></div>`;
+  wireSilverDrilldown();
+}
+
+function wireSilverDrilldown() {
+  document.querySelectorAll(".rowline.sv").forEach(row => {
+    row.onclick = () => {
+      const d = document.querySelector(`.svdetail[data-i="${row.dataset.i}"]`);
+      if (d) d.style.display = d.style.display === "none" ? "block" : "none";
+    };
+  });
+}
+
+function renderTopics() {
+  $("#pane-topics").innerHTML = `<div class="card"><h3>Queued topics</h3>
+    <p class="why">On a day with no earnings and no real news, these choose the
+      subject. Anything you miss in the quiz can be queued in one click.</p>
+    <ul class="queue" id="queue"><li style="color:var(--soft)">Loading…</li></ul></div>`;
   loadQueue();
+}
+
+function renderEpisodes() {
+  $("#pane-episodes").innerHTML = `<div class="card"><h3>Other episodes</h3>
+    <p class="why">Select one to load it as the episode above.</p>
+    <div id="episodes"></div></div>`;
   loadEpisodes();
-  loadRoundtrip();
 }
 
 async function loadRoundtrip() {
@@ -457,7 +563,7 @@ async function loadEpisodes() {
         + `<div id="epdetail"></div>`
       : `<div style="color:var(--soft)">This is the first episode.</div>`;
     el.querySelectorAll(".epitem").forEach(item => {
-      item.onclick = () => openEpisode(item.closest(".ep").dataset.id);
+      item.onclick = () => loadEpisodeAsMain(item.closest(".ep").dataset.id);
     });
     el.querySelectorAll(".del").forEach(btn => {
       btn.onclick = async (ev) => {
@@ -517,46 +623,31 @@ function trackRun(runId, li) {
   }, 5000);
 }
 
-async function openEpisode(id) {
-  const box = $("#epdetail");
-  box.innerHTML = `<div style="color:var(--soft);padding:12px 0">Loading…</div>`;
+// Selecting a past episode makes it the episode above, rather than expanding
+// a second copy of it further down the page.
+async function loadEpisodeAsMain(id) {
   try {
     const e = await (await fetch(`/api/episode/${id}`)).json();
-    const answers = e.answers || [];
-    box.innerHTML = `
-      <div class="card" style="margin-top:14px;background:var(--card2)">
-        <div class="meta">
-          <span class="pill">${e.mode_label || ""}</span>
-          <span>${fmtAge(e.generated_at).text}</span>
-          <span><b>${e.word_count}</b> words</span>
-        </div>
-        <h3>${e.episode_title || "(untitled)"}</h3>
-        ${list(parse(e.takeaways, []))}
-        <audio controls preload="none" src="/api/audio-by-id/${id}"></audio>
-        <details><summary>Read the transcript</summary>
-          <div id="oldscript" style="white-space:pre-wrap;margin-top:12px;color:#c8d3da"></div>
-        </details>
-        <div style="margin-top:16px">
-          <h3>Your answers</h3>
-          ${answers.length ? answers.map(a => `
-            <div class="q">
-              <div class="qtext">${a.question}</div>
-              <div class="said">You said: “${a.answer}”</div>
-              <div class="qrow" style="margin-top:8px">
-                <span class="score" style="color:${a.score >= 70 ? "var(--good)" :
-                  a.score >= 40 ? "var(--warm)" : "var(--bad)"}">${a.score ?? "—"}%</span>
-                <span style="color:var(--soft);font-size:12.5px">${fmtAge(a.answered_at).text}</span>
-              </div>
-              <div class="verdict">${a.verdict || ""}</div>
-              ${a.missed ? `<div class="teach">${a.missed}</div>` : ""}
-            </div>`).join("")
-            : `<div style="color:var(--soft)">You did not answer the questions on this one.</div>`}
-        </div>
-      </div>`;
-    $("#oldscript").textContent = e.script_text;
-    box.scrollIntoView({ behavior: "smooth", block: "nearest" });
+    BRIEFING = e;
+    const mins = (e.word_count / 153).toFixed(1);
+    $("#app").innerHTML = `
+      <div class="meta">
+        <span class="pill">${e.mode_label || ""}</span>
+        <span><b>${e.account_id}</b></span>
+        <span>quarter ending <b>${e.period_end}</b></span>
+        <span><b>${e.word_count}</b> words · ~${mins} min</span>
+        <span class="pill stale">from ${fmtAge(e.generated_at).text}</span>
+      </div>
+      <h2>${e.episode_title || "(untitled)"}</h2>
+      ${list(parse(e.takeaways, []))}
+      <audio controls preload="none" src="/api/audio-by-id/${id}"></audio>
+      <details><summary>Read the transcript</summary><div id="script"></div></details>`;
+    $("#script").textContent = e.script_text;
+    renderQuestions(parse(e.questions, []));
+    showTab("episode");
+    window.scrollTo({ top: 0, behavior: "smooth" });
   } catch (err) {
-    box.innerHTML = `<span class="err">Could not open that episode: ${err.message}</span>`;
+    $("#app").innerHTML = `<span class="err">Could not open that episode: ${err.message}</span>`;
   }
 }
 

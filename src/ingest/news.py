@@ -30,10 +30,18 @@ YAHOO = ("https://feeds.finance.yahoo.com/rss/2.0/headline"
 
 # Query terms matter: bare "NVDA" returns little, the company name returns the
 # world. Both are pinned per account rather than derived from the symbol.
+# `terms` is the relevance test: an item is kept only if one of these appears in
+# its title or summary. Yahoo's per-ticker feed turned out to return general
+# market news rather than news about the ticker - an NVIDIA request came back
+# with Hershey and Warren Buffett headlines - so the feed cannot be trusted to
+# have filtered anything.
 ACCOUNTS = {
-    "NVDA": {"ticker": "NVDA", "query": "NVIDIA"},
-    "GOOG": {"ticker": "GOOG", "query": "Alphabet+Google"},
-    "MU":   {"ticker": "MU",   "query": "Micron"},
+    "NVDA": {"ticker": "NVDA", "query": "NVIDIA",
+             "terms": ["nvidia", "nvda", "jensen huang"]},
+    "GOOG": {"ticker": "GOOG", "query": "Alphabet+Google",
+             "terms": ["alphabet", "google", "goog", "sundar pichai", "deepmind"]},
+    "MU":   {"ticker": "MU",   "query": "Micron",
+             "terms": ["micron", "\bmu\b"]},
 }
 
 import os
@@ -50,18 +58,30 @@ def strip_html(text: str) -> str:
     return re.sub(r"\s+", " ", html.unescape(re.sub(r"<[^>]+>", " ", text))).strip()
 
 
-def fetch(symbol: str, source: str, url: str):
+def fetch(symbol: str, source: str, url: str, terms):
+    import re
+
     import feedparser
 
+    pattern = re.compile("|".join(terms), re.I) if terms else None
     parsed = feedparser.parse(url, request_headers={"User-Agent": UA})
+    kept = dropped = 0
     for e in parsed.entries:
+        title = strip_html(e.get("title", ""))
+        summary = strip_html(e.get("summary", e.get("description", "")))
+        # The company has to actually be mentioned. Without this the episode
+        # cites articles about other companies entirely.
+        if pattern and not pattern.search(f"{title} {summary}"):
+            dropped += 1
+            continue
+        kept += 1
         yield {
             "symbol": symbol,
             "source": source,
-            "title": strip_html(e.get("title", "")),
+            "title": title,
             "url": e.get("link", ""),
             "published_at": e.get("published", e.get("updated", "")),
-            "summary": strip_html(e.get("summary", e.get("description", ""))),
+            "summary": summary,
             # Google News nests the outlet; Yahoo puts it flat or not at all.
             "publisher": (e.get("source", {}).get("title", "")
                           if isinstance(e.get("source"), dict)
@@ -80,9 +100,10 @@ def main() -> None:
             ("yahoo_finance", YAHOO.format(ticker=cfg["ticker"])),
         ):
             try:
-                items = list(fetch(symbol, source, url))
+                items = list(fetch(symbol, source, url, cfg.get("terms")))
                 rows.extend(items)
-                print(f"{symbol} {source}: {len(items)} items")
+                print(f"{symbol} {source}: {len(items)} items kept "
+                      f"(items not mentioning the company are dropped)")
             except Exception as e:
                 print(f"{symbol} {source}: FAILED - {type(e).__name__}: {str(e)[:120]}")
 

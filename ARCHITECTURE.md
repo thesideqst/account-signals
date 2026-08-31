@@ -276,6 +276,16 @@ after any schema change:
     GRANT USAGE ON SCHEMA app TO "<app-sp-client-id>";
     GRANT SELECT ON ALL TABLES IN SCHEMA app TO "<app-sp-client-id>";
 
+**The recurring failure here is silent partial success.**
+Four separate bugs in one session shared a shape: something failed and nothing
+said so. An INSERT with a duplicated column killed narration while the job
+reported success. A DELETE against a synced table was rejected and the UI simply
+said "Failed". A news feed returned articles about other companies and nothing
+marked them irrelevant. String replacements against source files did not match
+and left no trace. None raised an error; each looked fine until something
+downstream was checked. Where a step matters, check its effect rather than its
+exit code.
+
 ### Platform
 
 **Lakebase CDF is unavailable on Free Edition**, so the recap write-back runs

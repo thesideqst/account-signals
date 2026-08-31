@@ -137,7 +137,9 @@ def briefing(account_id: str):
                    questions, lineage,
                    script_text, word_count, audio_path, voice
             FROM app.gold_briefing_serving
-            WHERE account_id = %s ORDER BY generated_at DESC LIMIT 1
+            WHERE account_id = %s
+              AND briefing_id NOT IN (SELECT briefing_id FROM app.hidden_episodes)
+            ORDER BY generated_at DESC LIMIT 1
         """, (account_id,)).fetchone()
     if not row:
         raise HTTPException(404, f"no briefing for {account_id}")
@@ -507,32 +509,23 @@ def generate_now(account_id: str, request_id: int = Form(...)):
 
 @app.get("/api/sources/{account_id}")
 def sources(account_id: str):
-    """Links behind the episode, so a rep can go read the original.
+    """The sources this episode actually used.
 
-    Read from Unity Catalog rather than Postgres: the chunks are analytical
-    data and were never synced to the serving copy, which only carries what a
-    page load needs.
+    Read from the episode's own lineage rather than queried fresh. Querying for
+    "recent items" put a McKinsey piece about Moderna next to an NVIDIA episode,
+    because nothing connected the list to what went into the script.
     """
-    wh = os.environ.get("DATABRICKS_WAREHOUSE_ID", "")
-    if not wh:
+    import json as _json
+
+    with pg() as c:
+        row = c.execute("""
+            SELECT lineage FROM app.gold_briefing_serving
+            WHERE account_id = %s ORDER BY generated_at DESC LIMIT 1
+        """, (account_id,)).fetchone()
+    if not row or not row.get("lineage"):
         return []
     try:
-        r = workspace().statement_execution.execute_statement(
-            warehouse_id=wh, wait_timeout="30s",
-            statement=f"""
-                SELECT DISTINCT publisher, headline, url, source_type,
-                       cast(published_at AS string) AS published_at
-                FROM {CATALOG}.{SCHEMA}.silver_doc_chunks
-                WHERE url IS NOT NULL AND headline IS NOT NULL
-                  AND (account_id = '{account_id}' OR account_id = '_industry')
-                  AND published_at >= date_sub(current_date(), 30)
-                ORDER BY published_at DESC LIMIT 25
-            """)
-        if not r.result or (r.status.state.value if r.status else "") != "SUCCEEDED":
-            return []
-        return [{"publisher": v[0], "headline": v[1], "url": v[2],
-                 "source_type": v[3], "published_at": v[4]}
-                for v in (r.result.data_array or [])]
+        return (_json.loads(row["lineage"]) or {}).get("sources", [])
     except Exception:
         return []
 
@@ -682,9 +675,10 @@ def delete_episode(briefing_id: str):
         """)
         c.execute("INSERT INTO app.hidden_episodes (briefing_id) VALUES (%s) "
                   "ON CONFLICT DO NOTHING", (briefing_id,))
-        n = c.execute("DELETE FROM app.gold_briefing_serving WHERE briefing_id = %s",
-                      (briefing_id,)).rowcount
-    return {"deleted": n, "briefing_id": briefing_id}
+    # gold_briefing_serving is a SYNCED table: Databricks permits reads, indexes
+    # and DROP on those, and nothing else. The earlier DELETE could never have
+    # worked. Hiding is recorded instead, and every read filters on it.
+    return {"hidden": True, "briefing_id": briefing_id}
 
 
 @app.get("/api/audio-by-id/{briefing_id}")
@@ -715,7 +709,9 @@ def episodes(account_id: str):
             SELECT briefing_id, episode_title, mode_label, period_end,
                    generated_at, word_count
             FROM app.gold_briefing_serving
-            WHERE account_id = %s ORDER BY generated_at DESC LIMIT 30
+            WHERE account_id = %s
+              AND briefing_id NOT IN (SELECT briefing_id FROM app.hidden_episodes)
+            ORDER BY generated_at DESC LIMIT 30
         """, (account_id,)).fetchall()
 
 

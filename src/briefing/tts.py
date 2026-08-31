@@ -158,8 +158,17 @@ def main() -> None:
     print(f"wrote {path} ({len(audio) / 1_000_000:.2f} MB, "
           f"~{seconds / 60:.1f} min estimated at {wpm:.0f} words/min)")
 
+    # Append, never replace. CREATE OR REPLACE kept only the most recent run's
+    # audio, so with three accounts generated in sequence, two of them silently
+    # lost theirs and their episodes published silent.
     spark.sql(f"""
-        CREATE OR REPLACE TABLE {catalog}.{schema}.gold_briefing_audio AS
+        CREATE TABLE IF NOT EXISTS {catalog}.{schema}.gold_briefing_audio (
+            briefing_id STRING, account_id STRING, period_end STRING,
+            audio_path STRING, audio_bytes BIGINT, duration_seconds DOUBLE,
+            tts_model STRING, voice STRING, speed DOUBLE, generated_at TIMESTAMP)
+    """)
+    spark.sql(f"""
+        INSERT INTO {catalog}.{schema}.gold_briefing_audio
         SELECT '{row['briefing_id']}' AS briefing_id,
                '{row['account_id']}'  AS account_id,
                '{row['period_end']}'  AS period_end,

@@ -336,14 +336,25 @@ def main() -> None:
                 f"lower(chunk_text) LIKE '%{w}%'" for w in words)
             topic_filter = f"AND ({likes})"
 
-    trend_rows = spark.sql(f"""
-        SELECT publisher, headline, chunk_text, published_at
-        FROM {catalog}.{schema}.silver_doc_chunks
-        WHERE source_type IN ('industry_trend', 'news')
-          AND published_at >= date_sub(current_date(), 120)
-          {topic_filter}
-        ORDER BY published_at DESC LIMIT {14 if requested_topic else 10}
-    """).collect()
+    # Only pull industry material when it is actually about something. Without a
+    # subject to match against, "most recent industry items" put a McKinsey piece
+    # on Moderna into an NVIDIA episode - and because it was passed to the prompt,
+    # it then counted as a source the episode used.
+    if requested_topic:
+        trend_rows = spark.sql(f"""
+            SELECT publisher, headline, url, chunk_text, published_at
+            FROM {catalog}.{schema}.silver_doc_chunks
+            WHERE source_type IN ('industry_trend', 'news')
+              AND published_at >= date_sub(current_date(), 120)
+              {topic_filter}
+            ORDER BY published_at DESC LIMIT 14
+        """).collect()
+        if not trend_rows:
+            print("mode C: nothing in the sources matches the requested subject")
+    else:
+        trend_rows = []
+        print("no requested subject: industry trends left out rather than "
+              "padding the episode with unrelated coverage")
     if requested_topic and not trend_rows:
         print("mode C: nothing in the sources matches the requested subject")
     # Publication and headline travel with every item so the script can say
@@ -358,7 +369,7 @@ def main() -> None:
     # background. It was never passed before, so Mode B fired on news signals
     # and then produced an earnings recap labelled "Today's news".
     news_rows = spark.sql(f"""
-        SELECT publisher, headline, chunk_text, published_at
+        SELECT publisher, headline, url, chunk_text, published_at
         FROM {catalog}.{schema}.silver_doc_chunks
         WHERE source_type = 'news' AND account_id = '{account}'
           AND published_at >= date_sub(current_date(), 10)
@@ -489,19 +500,45 @@ def main() -> None:
              "rows": scalar(f"SELECT count(*) FROM {catalog}.{schema}.bronze_macro", 0),
              "last_ingested": str(scalar(f"SELECT max(_ingested_at) FROM {catalog}.{schema}.bronze_macro"))},
         ],
+        # The actual items, not just counts. This is the same JSON already
+        # travelling with the episode, so showing the detail costs nothing
+        # architecturally - no extra query path, no new table, and it stays
+        # correct because it is written by the run that used it.
         "silver": [
             {"table": "silver_financial_deltas", "used": len(delta_lines),
-             "note": "metrics selected for this episode"},
+             "note": "metrics selected for this episode",
+             "items": [d.lstrip("- ") for d in delta_lines]},
             {"table": "silver_metric_context", "used": len(context_lines),
-             "note": "computed relationships"},
+             "note": "relationships computed in SQL",
+             "items": [c.lstrip("- ") for c in context_lines]},
             {"table": "silver_doc_chunks (transcript)", "used": len(chunks),
-             "note": "management framing"},
+             "note": "management framing",
+             "items": [f"{c['speaker']} ({c['section']}): "
+                       f"{(c['chunk_text'] or '')[:150]}" for c in chunks[:12]]},
             {"table": "silver_doc_chunks (news)", "used": len(news_lines),
-             "note": "headlines"},
+             "note": "headlines",
+             "items": [f"{n['publisher']}: {n['headline']}" for n in news_rows[:14]]},
             {"table": "silver_doc_chunks (trends)", "used": len(trend_lines),
-             "note": "industry context"},
+             "note": "industry context",
+             "items": [f"{t['publisher']}: {t['headline']}" for t in trend_rows[:14]]},
             {"table": "silver_macro_context", "used": len(macro_lines),
-             "note": "macro series"},
+             "note": "macro series",
+             "items": [m.lstrip("- ") for m in macro_lines]},
+        ],
+        # The exact items that went into this prompt. Querying for "recent
+        # sources" afterwards surfaced whatever the feeds happened to carry -
+        # a McKinsey piece about Moderna alongside an NVIDIA episode - because
+        # nothing tied the list to what was actually used.
+        "sources": [
+            {"publisher": n["publisher"], "headline": n["headline"],
+             "url": n["url"], "kind": "news",
+             "published_at": str(n["published_at"])}
+            for n in news_rows if n["url"]
+        ] + [
+            {"publisher": t["publisher"], "headline": t["headline"],
+             "url": t["url"], "kind": "industry",
+             "published_at": str(t["published_at"])}
+            for t in trend_rows if t["url"]
         ],
         "gold": {"mode": mode, "mode_reason": mode_reason,
                  "prompt_chars": len(prompt), "model": endpoint},
