@@ -214,10 +214,23 @@ def audio(account_id: str):
 
 
 def stt_key() -> str:
-    """OpenAI key from the Databricks secret scope. The app service principal
-    needs READ on the scope; without it this raises and the endpoint says so."""
-    return workspace().secrets.get_secret(
+    """OpenAI key from the Databricks secret scope.
+
+    The SDK returns the value BASE64-ENCODED, unlike dbutils.secrets.get() in
+    the jobs, which returns it plain. Sending it undecoded produced "Incorrect
+    API key provided: c2stcHJv..." - which is the base64 of the real key, so
+    the error text itself gave it away.
+    """
+    import base64
+
+    raw = workspace().secrets.get_secret(
         scope="account_signals", key="stt_api_key").value
+    try:
+        decoded = base64.b64decode(raw).decode("utf-8").strip()
+    except Exception:
+        return raw.strip()
+    # If it round-trips to something key-shaped, the encoding was real.
+    return decoded if decoded.startswith("sk-") else raw.strip()
 
 
 def _transcribe(raw: bytes) -> str:
@@ -349,9 +362,19 @@ Grade what they actually understood, not their wording. Someone who gets the ide
 in loose language has understood it; someone who repeats a number without the reason has
 not.
 
+If they got something wrong or left something out, TEACH IT rather than naming it. Two or
+three sentences: what the right answer is, the mechanism behind it, and why it changes a
+customer conversation. Assume they will not go and look it up - this is the only chance
+the point has to land. A full episode can go deeper another day; this has to be enough
+that the idea sticks.
+
+Write it to them, plainly, the way you would explain it to a colleague who missed a
+meeting. No preamble, no "great attempt".
+
 Reply with JSON only:
 {{"score": <0-100>, "verdict": "one sentence said to them directly",
-  "missed": "the single most important thing they left out, or empty string"}}"""
+  "missed": "the single most important thing they left out, or empty string",
+  "teach": "two or three sentences explaining what they missed and why it matters, or empty string if they got it"}}"""
 
 
 @app.post("/api/answer/{account_id}")
@@ -397,10 +420,12 @@ async def answer(account_id: str, audio: UploadFile = File(...),
             VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)
         """, (briefing_id, account_id, rep_id, question_index, question,
               transcript, v.get("score"), str(v.get("verdict") or ""),
-              str(v.get("missed") or "")))
+              str(v.get("missed") or "") +
+              (("\n\n" + str(v.get("teach"))) if v.get("teach") else "")))
 
     return {"transcript": transcript, "score": v.get("score"),
-            "verdict": v.get("verdict"), "missed": v.get("missed") or ""}
+            "verdict": v.get("verdict"), "missed": v.get("missed") or "",
+            "teach": v.get("teach") or ""}
 
 
 @app.post("/api/topic/{account_id}")
@@ -430,6 +455,77 @@ def topics(account_id: str):
             WHERE account_id = %s AND status = 'queued'
             ORDER BY requested_at DESC LIMIT 20
         """, (account_id,)).fetchall()
+
+
+@app.post("/api/generate/{account_id}")
+def generate_now(account_id: str, request_id: int = Form(...)):
+    """Turn a queued topic into an episode now.
+
+    Runs the briefing job with the mode and subject forced, rather than waiting
+    for a day with no earnings and no news. Returns immediately with a run id -
+    generation takes a couple of minutes.
+    """
+    job_id = os.environ.get("BRIEFING_JOB_ID", "")
+    if not job_id:
+        raise HTTPException(500, "BRIEFING_JOB_ID is not configured for this app")
+
+    with pg() as c:
+        row = c.execute(
+            "SELECT topic FROM app.topic_requests WHERE request_id = %s",
+            (request_id,)).fetchone()
+    if not row:
+        raise HTTPException(404, f"no queued topic {request_id}")
+
+    run = workspace().jobs.run_now(
+        job_id=int(job_id),
+        job_parameters={"force_mode": "C", "force_topic": row["topic"]},
+    )
+    with pg() as c:
+        c.execute("""UPDATE app.topic_requests
+                     SET status = 'generating', used_at = now()
+                     WHERE request_id = %s""", (request_id,))
+    return {"run_id": run.run_id, "topic": row["topic"]}
+
+
+@app.get("/api/episode/{briefing_id}")
+def episode(briefing_id: str):
+    """One past episode in full: script, questions, and what was answered."""
+    with pg() as c:
+        row = c.execute("""
+            SELECT briefing_id, account_id, episode_title, mode_label, period_end,
+                   generated_at, word_count, takeaways, questions, script_text,
+                   audio_path
+            FROM app.gold_briefing_serving WHERE briefing_id = %s
+        """, (briefing_id,)).fetchone()
+        if not row:
+            raise HTTPException(404, "no such episode")
+        row["answers"] = c.execute("""
+            SELECT question_index, question, answer, score, verdict, missed,
+                   answered_at
+            FROM app.recap_answers WHERE briefing_id = %s
+            ORDER BY question_index, answered_at
+        """, (briefing_id,)).fetchall()
+    return row
+
+
+@app.get("/api/audio-by-id/{briefing_id}")
+def audio_by_id(briefing_id: str):
+    """Audio for a specific episode, so past ones stay playable."""
+    with pg() as c:
+        row = c.execute("""
+            SELECT audio_path FROM app.gold_briefing_serving
+            WHERE briefing_id = %s AND audio_path IS NOT NULL
+        """, (briefing_id,)).fetchone()
+    if not row:
+        raise HTTPException(404, "no audio for that episode")
+    try:
+        resp = workspace().files.download(row["audio_path"])
+    except Exception as e:
+        raise HTTPException(500, f"volume read failed: {type(e).__name__}")
+    data = resp.contents.read()
+    return Response(content=data, media_type="audio/mpeg",
+                    headers={"Content-Length": str(len(data)),
+                             "Accept-Ranges": "bytes"})
 
 
 @app.get("/api/episodes/{account_id}")

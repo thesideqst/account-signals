@@ -169,6 +169,53 @@ Open questions:
 - Requests are free text. They need grounding against something - the primer table, or a
   retrieval over existing sources - or Mode C is back to inventing.
 
+### Cross-account trends
+
+With several accounts, surface the themes that cut across them rather than
+rediscovering each one company by company.
+
+**The sharper argument is repetition, not portfolio insight.** A rep plays
+several of these back to back. If memory pricing is squeezing margins at three
+accounts, they hear the same explanation three times. That does not only waste
+minutes - it trains them to tune out, which undermines the recall loop the whole
+project rests on. Cross-account awareness lets one episode carry the full
+explanation and the others reference it in a sentence: "same memory pressure you
+heard about on the NVIDIA episode, and here is how it lands differently here."
+That alone justifies building it, even with no dedicated portfolio episode.
+
+**The architecture is already half-shaped for this.** Industry trend chunks
+carry the sentinel `account_id = '_industry'` precisely because they describe a
+sector rather than a company, and macro deliberately never triggers a mode for
+the same reason. Both are already signals that are not tied to one account. A
+cross-account theme is the same shape, one level up.
+
+**Detection can reuse what exists.** The cleanest signal is retrieval itself: if
+the same trend chunk or macro condition is pulled as relevant for three of four
+accounts on the same day, that is a shared theme by construction, with no new
+inference needed. Correlated metric movement - margins compressing across the
+portfolio - is the richer version and needs only the metric context tables that
+already exist.
+
+**The risk worth writing down.** Accounts in the same industry will always look
+correlated. "All semiconductor companies face memory pricing" is a tautology,
+not an insight, and a naive detector would surface it constantly. The useful
+signal is a theme that cuts across sectors, or one that hits accounts
+differently enough that the difference is the story. Whatever detects this needs
+a way to tell a real cross-cutting theme from plain sector membership, or it
+will produce confident noise.
+
+Open questions:
+- Where does it sit in the mode hierarchy? Probably below earnings and news, but
+  plausibly above a quiet day, since a portfolio theme beats an empty topic queue.
+- Does a portfolio episode get comprehension questions? The gaps would not belong
+  to any single account's callback.
+
+Blocked on having a second account, which is already needed for correctness
+testing - every NVDA-shaped assumption in the concept priority lists, the
+Operator-handover rule and the fiscal calendar handling needs a second company to
+shake out. Cross-account trends need at least two or three before there is
+anything to correlate.
+
 ## Planned decisions (phase 2)
 
 ### Enable native Lakebase CDF via external storage

@@ -41,7 +41,10 @@ DELIVERY = (
     "numbers - slow slightly on them rather than rushing past. Warm, not "
     "newsreaderly. Never sing-song, never breathless."
 )
-VOLUME_PATH = "/Volumes/{catalog}/{schema}/audio/{account}/{period}.mp3"
+# Keyed by briefing_id, not by period. Keying on the period meant every rerun
+# overwrote the same file, so "past episodes" pointed at whatever was generated
+# most recently and older audio was already gone.
+VOLUME_PATH = "/Volumes/{catalog}/{schema}/audio/{account}/{briefing_id}.mp3"
 
 
 def split_for_speech(script: str, limit: int = MAX_INPUT_CHARS):
@@ -120,7 +123,8 @@ def main() -> None:
         print(f"  chunk {i}/{len(chunks)}: {len(chunk):,} chars -> {len(audio):,} bytes total")
 
     path = VOLUME_PATH.format(catalog=catalog, schema=schema,
-                              account=row["account_id"], period=row["period_end"])
+                              account=row["account_id"],
+                              briefing_id=row["briefing_id"])
     os.makedirs(os.path.dirname(path), exist_ok=True)
     with open(path, "wb") as f:
         f.write(audio)

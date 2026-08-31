@@ -35,6 +35,12 @@ resources:
         # workspace. Leave blank and the Lakebase copy simply is not refreshed.
         - name: sync_pipeline_id
           default: ""
+        # Set by the app when a rep asks for a queued topic right now, rather
+        # than waiting for a quiet day.
+        - name: force_mode
+          default: ""
+        - name: force_topic
+          default: ""
 
       tasks:
         # Pull the structured deltas + the most relevant prose chunks per account.

@@ -49,6 +49,10 @@ def main() -> None:
     from pyspark.sql import SparkSession
 
     catalog, schema, endpoint = sys.argv[1], sys.argv[2], sys.argv[3]
+    # Optional overrides so a queued topic can be turned into an episode on
+    # demand instead of waiting for a day with no earnings and no news.
+    force_mode = sys.argv[4] if len(sys.argv) > 4 else ""
+    force_topic = sys.argv[5] if len(sys.argv) > 5 else ""
     spark = SparkSession.builder.getOrCreate()
     w = WorkspaceClient()
 
@@ -118,6 +122,9 @@ def main() -> None:
             WHERE symbol = '{account}')
     """).collect()
     mode = _sig[0]["mode"] if _sig else "C"
+    if force_mode:
+        mode = force_mode
+        print(f"mode forced to {mode} by request")
 
     # The computed "so what": margins, basis-point moves, growth relationships.
     # Handed to the model already calculated so it explains rather than derives.
@@ -225,6 +232,8 @@ def main() -> None:
         mode, mode_reason = sig[0]["mode"], sig[0]["mode_reason"] or "signals present"
     else:
         mode, mode_reason = "C", "no signals on record for this account"
+    if force_topic:
+        mode_reason = f"requested: {force_topic[:120]}"
     print(f"mode {mode} - {mode_reason}")
 
     # A graded recap from the recall loop becomes the cold-open callback.
@@ -321,8 +330,8 @@ def main() -> None:
     # On a quiet day the rep's queue picks the subject. Without this Mode C has
     # nothing to deep-dive on and the model chooses from its own knowledge,
     # which is the one thing the grounding rule exists to prevent.
-    requested_topic = ""
-    if mode == "C":
+    requested_topic = force_topic
+    if mode == "C" and not requested_topic:
         try:
             q = spark.sql(f"""
                 SELECT topic FROM {catalog}.{schema}.topic_queue_current

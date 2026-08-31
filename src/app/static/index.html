@@ -43,7 +43,13 @@
   .qwhy{color:var(--soft);font-size:12.5px;margin-bottom:12px}
   .qrow{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
   .score{font-weight:700;font-variant-numeric:tabular-nums}
+  .said{margin-top:10px;font-size:13px;color:var(--soft);font-style:italic;
+        border-left:2px solid var(--line);padding-left:10px}
   .verdict{margin-top:10px;font-size:13.5px;color:#cfdae1}
+  .teach{margin-top:10px;font-size:13.5px;color:#cfdae1;background:#12201f;
+         border-left:2px solid var(--good);padding:10px 12px;border-radius:0 6px 6px 0}
+  .epitem{cursor:pointer}
+  .epitem:hover{background:#1b242a}
   .missed{margin-top:8px;font-size:13px;color:var(--warm)}
   input[type=text]{flex:1;min-width:220px;background:var(--card2);color:var(--ink);
         border:1px solid var(--line);border-radius:7px;padding:9px 11px;font-size:13.5px}
@@ -142,6 +148,7 @@ function renderQuestions(questions) {
           <span class="state"></span>
           <span class="score"></span>
         </div>
+        <div class="said"></div>
         <div class="verdict"></div>
         <div class="missed"></div>
       </div>`).join("")}
@@ -163,7 +170,7 @@ function renderQuestions(questions) {
 function wireAnswer(el, q, i) {
   const btn = el.querySelector(".rec"), state = el.querySelector(".state");
   const score = el.querySelector(".score"), verdict = el.querySelector(".verdict");
-  const missed = el.querySelector(".missed");
+  const missed = el.querySelector(".missed"), said = el.querySelector(".said");
   let recorder = null, chunks = [];
 
   btn.onclick = async () => {
@@ -187,11 +194,20 @@ function wireAnswer(el, q, i) {
           const d = await r.json();
           if (!r.ok) throw new Error(d.detail || r.statusText);
           state.textContent = "";
+          // Show it back to them: transcription is imperfect, and a low score
+          // for a misheard word is worth being able to see.
+          said.textContent = d.transcript ? `You said: “${d.transcript}”` : "";
           const s = d.score;
           score.textContent = s == null ? "" : `${s}%`;
           score.style.color = s == null ? "" : (s >= 70 ? "var(--good)" : s >= 40 ? "var(--warm)" : "var(--bad)");
           verdict.textContent = d.verdict || "";
           // One click turns a gap into a future episode.
+          if (d.teach) {
+            const t = document.createElement("div");
+            t.className = "teach";
+            t.textContent = d.teach;
+            verdict.after(t);
+          }
           if (d.missed) {
             missed.innerHTML = `Missed: ${d.missed}
               <button class="ghost" style="margin-left:8px;padding:4px 10px;font-size:12px">
@@ -261,9 +277,32 @@ async function loadQueue() {
   try {
     const rows = await (await fetch(`/api/topics/${ACCT}`)).json();
     el.innerHTML = rows.length
-      ? rows.map(r => `<li>${r.topic}
-          <span style="color:var(--soft);font-size:12px"> — ${r.origin.replace("_", " ")}</span></li>`).join("")
+      ? rows.map(r => `<li data-id="${r.request_id}">${r.topic}
+          <span style="color:var(--soft);font-size:12px"> — ${r.origin.replace("_", " ")}</span>
+          <button class="ghost gen" style="margin-left:8px;padding:3px 9px;font-size:12px">
+            Make this episode now</button></li>`).join("")
       : `<li style="color:var(--soft)">Nothing queued. Add one above, or queue whatever you miss.</li>`;
+    el.querySelectorAll(".gen").forEach(btn => {
+      btn.onclick = async (ev) => {
+        const id = ev.target.closest("li").dataset.id;
+        ev.target.disabled = true; ev.target.textContent = "Generating…";
+        const form = new FormData(); form.append("request_id", id);
+        try {
+          const r = await fetch(`/api/generate/${ACCT}`, { method: "POST", body: form });
+          const d = await r.json();
+          if (!r.ok) throw new Error(d.detail || r.statusText);
+          ev.target.textContent = "Started — takes a few minutes";
+        } catch (e) {
+          ev.target.textContent = "Retry";
+          ev.target.disabled = false;
+          const msg = document.createElement("div");
+          msg.className = "err";
+          msg.style.cssText = "font-size:12.5px;margin-top:6px";
+          msg.textContent = e.message;
+          ev.target.closest("li").appendChild(msg);
+        }
+      };
+    });
   } catch { el.innerHTML = `<li class="err">Could not load the queue.</li>`; }
 }
 
@@ -272,11 +311,58 @@ async function loadEpisodes() {
   try {
     const rows = await (await fetch(`/api/episodes/${ACCT}`)).json();
     el.innerHTML = rows.length
-      ? rows.map(r => `<div class="ep">
+      ? rows.map(r => `<div class="ep epitem" data-id="${r.briefing_id}">
           <div>${r.episode_title || "(untitled)"}</div>
           <span>${r.mode_label || ""} · ${fmtAge(r.generated_at).text}</span></div>`).join("")
+        + `<div id="epdetail"></div>`
       : `<div style="color:var(--soft)">This is the first episode.</div>`;
+    el.querySelectorAll(".epitem").forEach(row => {
+      row.onclick = () => openEpisode(row.dataset.id);
+    });
   } catch { el.innerHTML = `<span class="err">Could not load past episodes.</span>`; }
+}
+
+async function openEpisode(id) {
+  const box = $("#epdetail");
+  box.innerHTML = `<div style="color:var(--soft);padding:12px 0">Loading…</div>`;
+  try {
+    const e = await (await fetch(`/api/episode/${id}`)).json();
+    const answers = e.answers || [];
+    box.innerHTML = `
+      <div class="card" style="margin-top:14px;background:var(--card2)">
+        <div class="meta">
+          <span class="pill">${e.mode_label || ""}</span>
+          <span>${fmtAge(e.generated_at).text}</span>
+          <span><b>${e.word_count}</b> words</span>
+        </div>
+        <h3>${e.episode_title || "(untitled)"}</h3>
+        ${list(parse(e.takeaways, []))}
+        <audio controls preload="none" src="/api/audio-by-id/${id}"></audio>
+        <details><summary>Read the transcript</summary>
+          <div id="oldscript" style="white-space:pre-wrap;margin-top:12px;color:#c8d3da"></div>
+        </details>
+        <div style="margin-top:16px">
+          <h3>Your answers</h3>
+          ${answers.length ? answers.map(a => `
+            <div class="q">
+              <div class="qtext">${a.question}</div>
+              <div class="said">You said: “${a.answer}”</div>
+              <div class="qrow" style="margin-top:8px">
+                <span class="score" style="color:${a.score >= 70 ? "var(--good)" :
+                  a.score >= 40 ? "var(--warm)" : "var(--bad)"}">${a.score ?? "—"}%</span>
+                <span style="color:var(--soft);font-size:12.5px">${fmtAge(a.answered_at).text}</span>
+              </div>
+              <div class="verdict">${a.verdict || ""}</div>
+              ${a.missed ? `<div class="teach">${a.missed}</div>` : ""}
+            </div>`).join("")
+            : `<div style="color:var(--soft)">You did not answer the questions on this one.</div>`}
+        </div>
+      </div>`;
+    $("#oldscript").textContent = e.script_text;
+    box.scrollIntoView({ behavior: "smooth", block: "nearest" });
+  } catch (err) {
+    box.innerHTML = `<span class="err">Could not open that episode: ${err.message}</span>`;
+  }
 }
 
 load();

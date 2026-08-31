@@ -11,6 +11,9 @@ env:
     value: workspace
   - name: SCHEMA
     value: account_signals_dev
+  # Lets the app run the briefing job on demand for a queued topic.
+  - name: BRIEFING_JOB_ID
+    value: '175641655518601'
   - name: LAKEBASE_ENDPOINT
     value: projects/account-signals-dev/branches/production/endpoints/primary
   # Lakebase injects PGHOST / PGDATABASE / PGUSER / PGPASSWORD / PGPORT when a
