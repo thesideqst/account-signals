@@ -39,6 +39,19 @@ resources:
               - "{{job.parameters.schema}}"
               - "{{job.parameters.sec_contact}}"
 
+        # 8-K filings and their press-release exhibits. The news feeds carry
+        # headlines - 186 characters on average - and a headline cannot
+        # support a claim, which is where the fabricated figures came from.
+        # A filing is the company's own words, in full, in the public domain.
+        - task_key: filing_documents
+          environment_key: ingest_env
+          spark_python_task:
+            python_file: ../src/ingest/filings.py
+            parameters:
+              - "{{job.parameters.catalog}}"
+              - "{{job.parameters.schema}}"
+              - "{{job.parameters.sec_contact}}"
+
         - task_key: transcripts
           environment_key: ingest_env
           spark_python_task:
@@ -98,6 +111,7 @@ resources:
         - task_key: build_silver
           depends_on:
             - task_key: edgar_xbrl
+            - task_key: filing_documents
             - task_key: transcripts
             - task_key: news
             - task_key: analyst_ratings

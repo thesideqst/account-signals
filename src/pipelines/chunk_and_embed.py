@@ -258,6 +258,76 @@ def silver_doc_chunks():
         )
     )
 
+    # SEC 8-K filings and their press-release exhibits. These are the answer to
+    # the headline problem: a news chunk averages 186 characters, a filing
+    # exhibit 10,000 to 24,000.
+    #
+    # Split the same way transcript turns are, and for the same reason: one
+    # vector over a 22,000 character press release averages twenty topics, so
+    # a query about margins matches the whole document rather than the passage
+    # that discusses margins.
+    filing_docs = (
+        dlt.read("bronze_filing_documents")
+        .filter(F.length(F.col("text")) > 0)
+        # Bronze is append-only and ingest runs several times a day, so the
+        # same document arrives repeatedly. Keep one row per document.
+        .withColumn("_r", F.row_number().over(
+            Window.partitionBy("accession", "document")
+                  .orderBy(F.col("_ingested_at").desc())))
+        .filter("_r = 1")
+    )
+    filing_sentences = (
+        filing_docs.select(
+            "*",
+            F.posexplode(F.split(F.col("text"), r"(?<=[.!?])\s+"))
+             .alias("sent_pos", "sentence"),
+        ).filter(F.length("sentence") > 0)
+    )
+    filing_running = (
+        Window.partitionBy("accession", "document").orderBy("sent_pos")
+        .rowsBetween(Window.unboundedPreceding, Window.currentRow)
+    )
+    filing_packed = (
+        filing_sentences
+        .withColumn("cum_chars", F.sum(F.length("sentence") + 1).over(filing_running))
+        .withColumn("part_index", F.floor(
+            (F.col("cum_chars") - F.length("sentence") - 1)
+            / F.lit(MAX_CHUNK_CHARS)).cast("int"))
+    )
+    filings = (
+        filing_packed
+        .groupBy("symbol", "cik", "form", "filed_date", "accession", "document",
+                 "item_description", "title", "part_index")
+        .agg(F.concat_ws(" ", F.sort_array(F.collect_list(
+                F.struct(F.col("sent_pos"), F.col("sentence"))))
+                .getField("sentence")).alias("chunk_text"))
+        .select(
+            F.col("symbol").alias("account_id"),
+            F.lit("filing").alias("source_type"),
+            F.to_date("filed_date").alias("published_at"),
+            F.concat_ws("/", F.lit("https://www.sec.gov/Archives/edgar/data"),
+                        F.col("cik"), F.col("accession"),
+                        F.col("document")).alias("url"),
+            F.concat_ws(":", F.lit("filing"), F.col("accession"),
+                        F.col("document"),
+                        F.col("part_index").cast("string")).alias("chunk_id"),
+            F.col("chunk_text"),
+            F.lit(None).cast("string").alias("speaker"),
+            F.lit(None).cast("string").alias("role"),
+            # What the filing is FOR, in words, so the model never has to infer
+            # meaning from an item code like "2.02".
+            F.col("item_description").alias("section"),
+            F.lit(None).cast("int").alias("turn_index"),
+            F.col("part_index"),
+            F.lit(1).alias("sentence_count"),
+            F.length(F.col("chunk_text")).alias("char_count"),
+            F.lit("SEC filing").alias("publisher"),
+            F.concat_ws(" - ", F.col("form"), F.col("title")).alias("headline"),
+            F.lit(None).cast("struct<fiscal_year:int,fiscal_quarter:int>").alias("period"),
+        )
+    )
+
     return (transcript_chunks
             .unionByName(trends, allowMissingColumns=True)
-            .unionByName(news, allowMissingColumns=True))
+            .unionByName(news, allowMissingColumns=True)
+            .unionByName(filings, allowMissingColumns=True))
