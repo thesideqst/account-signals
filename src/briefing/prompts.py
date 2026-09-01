@@ -274,7 +274,6 @@ def build(mode: str, account: str, deltas: str, framing: str, context: str = "",
           news: str = "", requested_topic: str = "",
           topic_source: str = "rep",
           reported_on: str = "", reported_days_ago=None) -> str:
-          topic_source: str = "rep") -> str:
     """Assemble the prompt for one mode."""
     m = MODES[mode]
     company = COMPANY_NAMES.get(account, account)
