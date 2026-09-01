@@ -19,8 +19,26 @@ without changing the output. It earns its place when the account list and
 source count grow.
 """
 import json
+import re
 import sys
 
+
+
+def figures(text: str) -> set:
+    """Every numeric value mentioned in a piece of text, as floats.
+
+    Used by the grounding guard to compare what the script says against what
+    the model was handed. Commas are stripped so "96,221" and "96221" compare
+    equal; anything that will not parse is skipped rather than raising, because
+    a guard that crashes the run is worse than one that misses a token.
+    """
+    vals = set()
+    for tok in re.findall(r"\d[\d,]*(?:\.\d+)?", text or ""):
+        try:
+            vals.add(float(tok.replace(",", "")))
+        except ValueError:
+            pass
+    return vals
 
 
 def extract_text(content) -> str:
@@ -389,6 +407,26 @@ def main() -> None:
 
     # Then industry context. These are not account-specific, so they are capped
     # at recent items rather than everything the feeds have ever published.
+    # A retrieved item is either an ARTICLE or a HEADLINE. 410 of 430 news
+    # chunks are 300 characters or fewer - a headline plus a truncated teaser -
+    # because the RSS feeds carry summaries, not article bodies. A stub cannot
+    # support a claim beyond the words it contains, and every fabricated figure
+    # found in the audit sat on one: a 325-character Yahoo teaser became "a
+    # $1,000 stake at the 1999 IPO would be worth over $200,000", with both
+    # numbers invented and both credited to the article.
+    #
+    # So the model is told which is which. Labelled with a KIND: field rather
+    # than a bracket, because the model reads brackets aloud - the same reason
+    # transcript chunks use SPEAKER:/SECTION:/SAID: instead of [Speaker, section].
+    STUB_CHARS = 300
+
+    def source_line(row, limit):
+        text = (row["chunk_text"] or "").strip()
+        kind = "HEADLINE ONLY" if len(text) <= STUB_CHARS else "ARTICLE"
+        return (f"- KIND: {kind} | PUBLICATION: {row['publisher'] or 'unattributed'}"
+                f" | HEADLINE: {row['headline']} | DATE: {row['published_at']}"
+                f" | TEXT: {text[:limit]}")
+
     # For a requested deep dive, pull what is ABOUT the subject rather than
     # whatever happens to be recent. Keyword matching is crude - this is the
     # job Vector Search exists for, and the endpoint is already provisioned -
@@ -435,11 +473,7 @@ def main() -> None:
         print("mode C: nothing in the sources matches the requested subject")
     # Publication and headline travel with every item so the script can say
     # where a claim came from instead of "a recent report".
-    trend_lines = [
-        f"- {t['publisher']}, \"{t['headline']}\" ({t['published_at']}): "
-        f"{(t['chunk_text'] or '')[:340]}"
-        for t in trend_rows
-    ]
+    trend_lines = [source_line(t, 340) for t in trend_rows]
 
     # News is account-specific and is the SUBJECT of a Mode B episode, not
     # background. It was never passed before, so Mode B fired on news signals
@@ -451,12 +485,10 @@ def main() -> None:
           AND published_at >= date_sub(current_date(), 10)
         ORDER BY published_at DESC LIMIT 18
     """).collect()
-    news_lines = [
-        f"- {n['publisher'] or 'unattributed'}, \"{n['headline']}\" "
-        f"({n['published_at']}): {(n['chunk_text'] or '')[:260]}"
-        for n in news_rows
-    ]
-    print(f"news: {len(news_lines)} items")
+    news_lines = [source_line(n, 260) for n in news_rows]
+    stubs = sum(1 for n in news_rows
+                if len((n["chunk_text"] or "").strip()) <= STUB_CHARS)
+    print(f"news: {len(news_lines)} items, {stubs} of them headline-only")
 
     macro_block = ""
     if macro_lines or trend_lines:
@@ -533,6 +565,40 @@ def main() -> None:
         n = len(num.findall(para))
         if n >= 8:
             print(f"DENSITY WARNING - paragraph {i} carries {n} figures: {para[:110]}")
+
+    # GROUNDING GUARD. The rule "never state a fact you were not given" is the
+    # one the whole project rests on, so it is checked rather than trusted -
+    # same reasoning as the format guard above. Every figure spoken must appear
+    # somewhere in the material the model was handed; anything else was
+    # invented, however plausible it sounds. Real cases this catches: "$200,000"
+    # and "1999" attributed to a 325-character teaser containing neither, and
+    # "81 cents on the dollar" derived from a growth-rate gap when the actual
+    # cost ratio was 25 cents.
+    # Rounding is expected: the prompt asks for one decimal place, so 74.98 may
+    # legitimately be spoken as 75. Outside 1% - or 0.05 for small values - the
+    # number was not handed over.
+    supplied = figures(prompt)
+    unsupported = sorted(
+        v for v in figures(script)
+        if not any(abs(v - t) <= max(0.05, abs(v) * 0.01) for t in supplied))
+    if unsupported:
+        print(f"GROUNDING WARNING - {len(unsupported)} figure(s) appear in no "
+              f"supplied source: "
+              + ", ".join(f"{v:g}" for v in unsupported[:12]))
+
+    # Spelled-out figures escape the digit scan entirely - the original
+    # "ninety-nine gigawatts" fabrication survived every numeric check because
+    # it contains no digits. Reported for a human to read rather than judged,
+    # since most are legitimate prose.
+    spelled = [m.group(0) for m in _re.finditer(
+        r"\b(?:twenty|thirty|forty|fifty|sixty|seventy|eighty|ninety|one|two|"
+        r"three|four|five|six|seven|eight|nine|ten|eleven|twelve)"
+        r"(?:[- ](?:one|two|three|four|five|six|seven|eight|nine))?"
+        r"[ -](?:hundred|thousand|million|billion|trillion|percent|gigawatt)\w*",
+        script, _re.I)]
+    if spelled:
+        print(f"SPELLED-OUT FIGURES for review ({len(spelled)}): "
+              + ", ".join(sorted({x.lower() for x in spelled})[:10]))
 
     words = len(script.split())
     print(f"script: {words:,} words, ~{words / 150:.1f} minutes read aloud")

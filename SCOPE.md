@@ -169,6 +169,51 @@ Open questions:
 - Requests are free text. They need grounding against something - the primer table, or a
   retrieval over existing sources - or Mode C is back to inventing.
 
+### Full-article news, not headlines and teasers
+
+The single largest source of fabrication in this pipeline is that the news it
+retrieves is not articles. **410 of 430 news chunks are 300 characters or
+fewer** - a headline plus a truncated teaser - because Google News and Yahoo
+Finance RSS carry summaries, not bodies. The 2026-09-01 audit traced every
+ungrounded figure it found to one of these stubs: a 325-character teaser about
+an IPO investment became an invented 1999 date and an invented $200,000 figure,
+and a headline containing "15 gigawatts" became an invented global ceiling on
+AI power with a consequence chain built on top of it.
+
+**This is a data problem wearing a prompt problem's clothes.** The model is
+handed a headline and asked to narrate its significance, which is a request to
+speculate. No prompt rule fully survives that, because the instruction and the
+task are in direct conflict. The HEADLINE ONLY labelling and the grounding
+guard added on 2026-09-01 are mitigation - they stop the worst of it and catch
+what gets through - but the fix is to hand the model the article.
+
+What it would change:
+- **Ingestion** gains a fetch-and-extract step: follow the RSS link, pull the
+  page, extract the body. Readability-style extraction rather than raw HTML.
+- **Chunking already works** - `chunk_and_embed.py` splits on sentence
+  boundaries and would simply have real text to split.
+- **Retrieval gets more selective, not less.** With bodies, keyword matching
+  and Vector Search both start earning their keep; today they match against a
+  headline, where almost any query looks equally relevant.
+- **The KIND: ARTICLE / HEADLINE ONLY distinction stays.** Some sources will
+  always be headline-only, and the model needs to know which.
+
+Risks to weigh before doing it:
+- **Terms of service.** Scraping article bodies is a different act from reading
+  an RSS summary. Seeking Alpha was already ruled out on ToS grounds and that
+  reasoning has to extend here rather than be quietly forgotten - the decision
+  on 2026-08-30 was explicitly that taking their headlines while declining
+  their transcripts would be picking whichever reading suited us.
+- **Paywalls.** Many of the most useful outlets will return a stub or a consent
+  wall, so the extractor must detect that and fall back to HEADLINE ONLY rather
+  than treating boilerplate as body text.
+- **A licensed API is the clean answer** if one fits the budget - it removes
+  the ToS question and the extraction fragility together.
+
+Until then the guard is what stands between a teaser and a confident invented
+number, so it should not be removed when this lands - it should be the test
+that proves this worked.
+
 ### Cross-account trends
 
 With several accounts, surface the themes that cut across them rather than
@@ -348,3 +393,6 @@ tooling, and phase 2 is fully scriptable.
 - 2026-08-31 — The offline schema check rewrites the CLI's `\p{L}` regexes into Python-compatible ones rather than deleting them. Deleting compiles, but it leaves the `${var.x}` branch of each `oneOf` matching everything, which silently disables every enum check — verified by planting `permission: CAN_DO_ANYTHING` and watching it pass clean. A check that cannot fail is worse than no check, so each guard was tested against a deliberately broken config before being trusted
 - 2026-09-01 — The industry-trend retrieval is scoped to `account_id IN ('_industry', <account>)`. The query selected `source_type IN ('industry_trend', 'news')` with no account filter, so the news half swept up every other account's articles: one Micron episode cited 9 NVDA items and 1 GOOG item out of 28 - Venezuelan oil, a congressman selling Alphabet stock - and `/api/sources` presented them to the rep as the sources Micron's episode used. Measured after the fix on the same account: 32 of 32 sources belong to MU
 - 2026-09-01 — Provenance counts are scoped to the account wherever the source has one, and the two that do not (industry trends, macro) say so explicitly rather than appearing per-account. Table-wide counts meant a GOOG episode reported "6,828 analyst rows, ingested today" when zero were GOOG - FMP's free tier is exhausted by NVDA's backfill before GOOG is reached, so that account has no ratings at all. The one panel whose whole purpose is honesty about sources was quoting another company's numbers; it now reads 0
+- 2026-09-01 — Retrieved items are labelled `KIND: ARTICLE` or `KIND: HEADLINE ONLY`, and the prompt states what may be done with each: a headline may be reported and quoted, never elaborated into claims, figures, causes or consequences. 410 of 430 news chunks are 300 characters or fewer, and every fabricated figure the audit found sat on one. Labelled with a `KIND:` field rather than a bracket, because the model reads brackets aloud — the same reason transcript chunks use `SPEAKER:/SECTION:/SAID:`
+- 2026-09-01 — A grounding guard checks every figure in the finished script against the material the model was handed, and warns on any that appear nowhere. The rule "never state a fact you were not given" is the one the project rests on, so it is checked rather than trusted — the same reasoning as the format guard, which exists because the model produced bullets after being told not to. Rounding to one decimal is tolerated (1%, or 0.05 for small values) because the prompt asks for it; a guard that flags rounding would cry wolf every episode. Spelled-out figures are reported separately for a human to read, because the original "ninety-nine gigawatts" fabrication contained no digits and survived every numeric check
+- 2026-09-01 — The guard was proved on real fabrications before being trusted, not on invented examples: run against the episode that shipped the IPO claim it flags exactly the invented 1999 and $200,000 while leaving the genuine $1,000 alone, and it accepts four real rounding cases. A guard that cannot be shown to fire is indistinguishable from no guard
