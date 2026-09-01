@@ -33,6 +33,12 @@ LAKEBASE_ENDPOINT = os.environ.get(
     "LAKEBASE_ENDPOINT",
     "projects/account-signals-dev/branches/production/endpoints/primary",
 )
+# A double-tap on submit is a duplicate; the same words a quarter of an hour
+# later is a genuine second attempt. The observed duplicate recap was 10.06
+# seconds apart and a real retry on the same question was 16 minutes, so the
+# line sits comfortably between them.
+DUPLICATE_WINDOW_SECONDS = 60
+
 # Hidden episodes stay in the table (a synced table permits only reads,
 # indexes and DROP, so a DELETE could never have worked) and every read has to
 # exclude them. That was remembered in two places out of seven: hide the
@@ -426,6 +432,18 @@ async def submit_recap(account_id: str, audio: UploadFile = File(...),
     seconds = int(len(raw) / 16000)   # rough, webm/opus is variable bitrate
     try:
         with pg() as c:
+            # recap_id 3 and 4 are byte-identical, 10.06 seconds apart, and
+            # each was graded separately into a DIFFERENT verdict. Returning
+            # the first row keeps one recap with one grade.
+            row = c.execute(f"""
+                SELECT recap_id FROM app.recall_recaps
+                WHERE account_id = %s AND rep_id = %s AND transcript = %s
+                  AND created_at > now() - interval '{DUPLICATE_WINDOW_SECONDS} seconds'
+                ORDER BY recap_id DESC LIMIT 1
+            """, (account_id, rep_id, transcript)).fetchone()
+            if row:
+                return {"recap_id": row["recap_id"], "transcript": transcript,
+                        "seconds": seconds, "duplicate": True}
             row = c.execute("""
                 INSERT INTO app.recall_recaps
                     (account_id, rep_id, briefing_date, transcript, audio_seconds)
@@ -531,6 +549,25 @@ async def answer(account_id: str, audio: UploadFile = File(...),
 
     transcript = _transcribe(await audio.read())
 
+    # Return the FIRST verdict rather than grading again. A duplicate is not a
+    # harmless extra row: identical input graded twice produced different
+    # verdicts on the recap path - accuracy 35 and 30, six gaps and five - so
+    # a double-tap forks the record of what the rep understood. Checked before
+    # the grading call, so the duplicate costs nothing.
+    with pg() as c:
+        dup = c.execute(f"""
+            SELECT answer_id, score, verdict, missed FROM app.recap_answers
+            WHERE briefing_id = %s AND account_id = %s AND rep_id = %s
+              AND question_index = %s AND answer = %s
+              AND answered_at > now() - interval '{DUPLICATE_WINDOW_SECONDS} seconds'
+            ORDER BY answer_id DESC LIMIT 1
+        """, (briefing_id, account_id, rep_id, question_index,
+              transcript)).fetchone()
+    if dup:
+        return {"transcript": transcript, "score": dup["score"],
+                "verdict": dup["verdict"], "missed": dup["missed"] or "",
+                "teach": "", "duplicate_of": dup["answer_id"]}
+
     resp = workspace().serving_endpoints.query(
         name="databricks-gpt-oss-120b",
         messages=[ChatMessage(role=ChatMessageRole.USER,
@@ -588,10 +625,20 @@ def add_topic(account_id: str, topic: str = Form(...), origin: str = Form("manua
 @app.get("/api/topics/{account_id}")
 def topics(account_id: str):
     with pg() as c:
+        # `generating` is not a terminal state, though nothing used to move it
+        # on: the app sets it when a rep triggers a run, and a run that failed
+        # or was cancelled stranded that topic outside the queue permanently.
+        # A run takes two to four minutes, so anything still generating after
+        # thirty is a run that died and the topic comes back. Mirrors the same
+        # rule in topic_queue_current, so the tab and the pipeline agree on
+        # what is outstanding.
         return c.execute("""
-            SELECT request_id, topic, origin, requested_at
+            SELECT request_id, topic, origin, requested_at, status
             FROM app.topic_requests
-            WHERE account_id = %s AND status = 'queued'
+            WHERE account_id = %s
+              AND (status = 'queued'
+                   OR (status = 'generating'
+                       AND used_at < now() - interval '30 minutes'))
             ORDER BY requested_at DESC LIMIT 20
         """, (account_id,)).fetchall()
 

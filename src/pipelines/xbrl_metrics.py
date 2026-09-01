@@ -40,7 +40,16 @@ CONCEPTS = {
         "RevenueFromContractWithCustomerExcludingAssessedTax",
         "SalesRevenueNet",
     ],
-    "cost_of_revenue":  ["CostOfRevenue"],
+    # Two tags, best first. Companies pick one and stay with it: NVDA files
+    # CostOfRevenue (3,360 facts) and MU files CostOfGoodsAndServicesSold
+    # (1,278) with ZERO CostOfRevenue - so a single-tag list gave Micron no
+    # cost line at all, and "did costs outrun revenue" never appeared in a
+    # Micron briefing. The order also fills NVDA's one hole at 2019-01-27,
+    # where CostOfRevenue is absent and CostOfGoodsAndServicesSold is not.
+    "cost_of_revenue":  ["CostOfRevenue", "CostOfGoodsAndServicesSold"],
+    # Alphabet does not tag GrossProfit at all - zero facts, ever - so gross
+    # margin was NULL on every GOOG row. Where it is not filed it is derived
+    # below from revenue minus cost of revenue, which is its definition.
     "gross_profit":     ["GrossProfit"],
     "operating_income": ["OperatingIncomeLoss"],
     "net_income":       ["NetIncomeLoss"],
@@ -181,7 +190,50 @@ def silver_quarterly_metrics():
             F.lit(True).alias("is_derived"),
         )
     )
-    return reported.unionByName(derived)
+    base = reported.unionByName(derived)
+
+    # GROSS PROFIT, DERIVED WHERE IT IS NOT FILED.
+    #
+    # Alphabet reports revenue and cost of revenue but never tags GrossProfit,
+    # so gross_margin_pct was NULL on all 61 GOOG rows and the briefing simply
+    # had no margin line for that account. Gross profit IS revenue minus cost
+    # of revenue - this is the definition, not an estimate - so deriving it is
+    # arithmetic of exactly the kind this pipeline exists to do.
+    #
+    # Derived AFTER the Q4 union so it sees reported and derived quarters
+    # alike: a derived Q4 gross profit then falls out of the derived Q4
+    # revenue and cost without a second special case.
+    #
+    # Only where it was not filed. A company that reports GrossProfit keeps
+    # its own number, for the same reason Q4 is never derived twice.
+    already_filed = (
+        base.filter(F.col("metric") == "gross_profit")
+        .select("symbol", "period_start", "period_end").distinct()
+    )
+    rev = base.filter(F.col("metric") == "revenue").select(
+        "symbol", "period_start", "period_end",
+        F.col("value").alias("_rev"),
+        "fiscal_year", "form", "filed", "accession",
+    )
+    cost = base.filter(F.col("metric") == "cost_of_revenue").select(
+        "symbol", "period_start", "period_end", F.col("value").alias("_cost"),
+    )
+    derived_gp = (
+        rev.join(cost, ["symbol", "period_start", "period_end"], "inner")
+        .join(already_filed, ["symbol", "period_start", "period_end"], "left_anti")
+        .select(
+            "symbol",
+            F.lit("gross_profit").alias("metric"),
+            # Records HOW it was obtained, so provenance stays readable in the
+            # table rather than only in this comment.
+            F.lit("DerivedRevenueMinusCostOfRevenue").alias("concept"),
+            "period_start", "period_end",
+            (F.col("_rev") - F.col("_cost")).alias("value"),
+            "fiscal_year", "form", "filed", "accession",
+            F.lit(True).alias("is_derived"),
+        )
+    )
+    return base.unionByName(derived_gp)
 
 
 @dlt.table(comment="QoQ and YoY change, joined on dates rather than row order.")

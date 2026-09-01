@@ -24,6 +24,130 @@ import sys
 
 
 
+# Standing subjects for a deep dive when no rep has asked for anything.
+#
+# Mode C fires on a quiet day and, with an empty queue, previously produced an
+# episode with no subject at all - which is the one situation where the model
+# would have had to choose from its own knowledge, the exact hole the grounding
+# rule exists to close.
+#
+# Each subject carries its own MATCH TERMS rather than relying on splitting the
+# phrase into words. "big bets" has no word longer than four characters, so the
+# generic splitter would produce an empty filter and pull back whatever was
+# most recent - which is how a McKinsey piece on Moderna once became an NVIDIA
+# source. Terms are lowercase and matched against chunk text.
+FALLBACK_SUBJECTS = [
+    ("how the business actually makes money",
+     ["business model", "revenue model", "monetiz", "monetis", "pricing",
+      "segment", "gross margin", "take rate"]),
+    ("the company's history and how it got here",
+     ["founded", "history", "origins", "decade", "milestone", "early days"]),
+    ("who the executives are and what each one owns",
+     ["chief executive", "chief financial", "ceo", "cfo", "board",
+      "leadership", "executive team"]),
+    ("how the executives are paid, and what that rewards",
+     ["compensation", "incentive", "equity award", "bonus", "stock award",
+      "pay package"]),
+    ("the supply chain this company depends on",
+     ["supply", "supplier", "foundry", "fab", "capacity", "logistics",
+      "inventory", "lead time"]),
+    ("the big bets, and what has to be true for them to pay off",
+     ["investment", "roadmap", "next generation", "initiative", "strategic",
+      "long term", "bet on"]),
+    ("who they actually compete with",
+     ["competitor", "rival", "market share", "competition", "versus",
+      "alternative"]),
+    ("strengths, weaknesses, opportunities and threats",
+     ["strength", "weakness", "opportunity", "threat", "risk", "advantage",
+      "headwind", "tailwind"]),
+    ("the technology partnerships that matter right now",
+     ["partner", "partnership", "collaboration", "alliance", "joint",
+      "ecosystem"]),
+]
+
+# Below this, a subject is not worth an episode - there is nothing to teach
+# from, and the model would be pushed toward filling the gap from memory.
+MIN_SUBJECT_CHUNKS = 4
+
+
+def _record_topic_usage(spark, catalog, schema, request_id, account, topic,
+                        briefing_id):
+    """Append one topic-usage row without interpolating text into SQL.
+
+    The text is a rep's own words or a subject phrase, either of which can
+    contain a quote. Escaping it into a SQL literal lost the apostrophe in
+    "the company's history" - stored as "the companys history" - and since the
+    rotation matches the stored topic against the list, that subject would
+    never match and would be chosen again on every quiet day.
+    """
+    from datetime import datetime, timezone
+
+    spark.sql(f"""
+        CREATE TABLE IF NOT EXISTS {catalog}.{schema}.gold_topic_usage (
+            request_id BIGINT, account_id STRING, topic STRING,
+            briefing_id STRING, used_at TIMESTAMP
+        )
+    """)
+    spark.createDataFrame(
+        [(request_id, account, topic, briefing_id,
+          datetime.now(timezone.utc))],
+        "request_id bigint, account_id string, topic string, "
+        "briefing_id string, used_at timestamp",
+    ).write.mode("append").saveAsTable(
+        f"{catalog}.{schema}.gold_topic_usage")
+
+
+def pick_fallback_subject(spark, catalog, schema, account):
+    """Choose a standing subject deterministically, preferring one with material.
+
+    Deterministic on purpose. Letting the model choose would put the subject
+    AND the script in the same hands, which is the same objection that keeps
+    mode selection in SQL: a wrong subject should be a query to inspect, not a
+    generation to re-run.
+
+    Order is: subjects not yet covered for this account, in list order, and
+    among those the first that actually has enough retrieved material to teach
+    from. A subject with nothing behind it is skipped rather than attempted.
+    """
+    used = set()
+    try:
+        rows = spark.sql(f"""
+            SELECT DISTINCT topic FROM {catalog}.{schema}.gold_topic_usage
+            WHERE account_id = '{account}' AND request_id IS NULL
+        """).collect()
+        used = {r["topic"] for r in rows}
+    except Exception:
+        pass  # table appears on first use; absence just means nothing is used
+
+    unused = [(t, terms) for t, terms in FALLBACK_SUBJECTS if t not in used]
+    if not unused:
+        # Every subject has been covered - start the rotation again rather
+        # than producing no episode.
+        print("all standing subjects covered for this account; rotating again")
+        unused = FALLBACK_SUBJECTS
+
+    thin = None
+    for subject, terms in unused:
+        likes = " OR ".join(
+            f"lower(chunk_text) LIKE '%{t}%'" for t in terms)
+        n = spark.sql(f"""
+            SELECT count(*) AS n FROM {catalog}.{schema}.silver_doc_chunks
+            WHERE account_id = '{account}' AND ({likes})
+        """).collect()[0]["n"]
+        if n >= MIN_SUBJECT_CHUNKS:
+            print(f"standing subject: {subject} ({n} matching chunks)")
+            return subject, terms
+        if thin is None:
+            thin = (subject, terms, n)
+
+    # Nothing cleared the bar. Take the first unused anyway and say so - the
+    # prompt already instructs the model to admit thin coverage rather than
+    # invent, and an honest thin episode beats no episode.
+    subject, terms, n = thin
+    print(f"standing subject: {subject} - only {n} matching chunk(s), "
+          f"below the {MIN_SUBJECT_CHUNKS} wanted; the script is told to say "
+          f"so rather than fill the gap")
+    return subject, terms
 # FRED returns bare numbers; the SERIES is what makes them mean something.
 # Without a unit the prompt carried "Private nonresidential fixed investment:
 # 4623.36" and the script said "climbing to 4 623" - a listener hears "four,
@@ -215,13 +339,36 @@ def main() -> None:
         print(f"  filing date unavailable: {type(e).__name__}")
 
     # Mode is needed before retrieval, because what gets retrieved depends on it.
+    #
+    # Taken from the STRONGEST signal in a short recent window, not from the
+    # latest signal_date. Those differ in exactly the case that matters most.
+    # A company reports four times a year and files after the close, so the
+    # earnings row lands on, say, 2026-08-26 - and news arrives every single
+    # day, creating a newer row on the 27th. The briefing runs 05:45 the next
+    # morning, so `max(signal_date)` found the news row and chose Mode B,
+    # skipping the quarter. Measured: NVDA's 2026-08-26 row is correctly
+    # classified A (1 filing, 1 call, 32 news) and no Mode A episode has ever
+    # been produced.
+    #
+    # A beats B beats C, and the window is the horizon over which an earnings
+    # day is still the most important thing that happened - two days, so a
+    # Friday-evening filing is still the subject on Monday morning.
+    MODE_WINDOW_DAYS = 2
     _sig = spark.sql(f"""
-        SELECT mode FROM {catalog}.{schema}.silver_daily_signals
-        WHERE symbol = '{account}' AND signal_date = (
-            SELECT max(signal_date) FROM {catalog}.{schema}.silver_daily_signals
-            WHERE symbol = '{account}')
+        SELECT mode, signal_date FROM {catalog}.{schema}.silver_daily_signals
+        WHERE symbol = '{account}'
+          AND signal_date >= date_sub(current_date(), {MODE_WINDOW_DAYS})
+        -- A first, then the most recent day within the window. Ranked
+        -- explicitly rather than relying on 'A' < 'B' < 'C' sorting, which
+        -- is true today and silently wrong the moment a mode is renamed.
+        ORDER BY CASE mode WHEN 'A' THEN 0 WHEN 'B' THEN 1 ELSE 2 END,
+                 signal_date DESC
+        LIMIT 1
     """).collect()
     mode = _sig[0]["mode"] if _sig else "C"
+    if _sig:
+        print(f"mode {mode} from signal_date {_sig[0]['signal_date']} "
+              f"(strongest signal in the last {MODE_WINDOW_DAYS} day(s))")
     if force_mode:
         mode = force_mode
         print(f"mode forced to {mode} by request")
@@ -230,20 +377,39 @@ def main() -> None:
     # nothing to deep-dive on and the model chooses from its own knowledge,
     # which is the one thing the grounding rule exists to prevent.
     requested_topic = force_topic
+    topic_request_id = None
+    subject_terms = None
+    # Whether a human asked for this subject or the system chose it.
+    # The prompt must not tell the listener a rep asked when none did.
+    topic_source = "rep" if force_topic else "rep"
     if mode == "C" and not requested_topic:
         try:
             q = spark.sql(f"""
-                SELECT topic FROM {catalog}.{schema}.topic_queue_current
+                SELECT request_id, topic
+                FROM {catalog}.{schema}.topic_queue_current
                 WHERE account_id = '{account}'
                 ORDER BY requested_at ASC LIMIT 1
             """).collect()
             if q:
                 requested_topic = q[0]["topic"]
+                # Kept so the topic can be marked used once the episode
+                # actually publishes. Without it the queue never advanced:
+                # this query returned request_id 1 on every scheduled run,
+                # forever, however many episodes had already covered it.
+                topic_request_id = q[0]["request_id"]
                 print(f"mode C subject from the queue: {requested_topic[:80]}")
             else:
-                print("mode C with an empty queue - no requested subject")
+                print("mode C with an empty queue - choosing a standing subject")
         except Exception as e:
             print(f"  topic queue unavailable: {type(e).__name__}")
+
+    # Still nothing to talk about: no rep request, and none queued. Rather
+    # than an episode with no subject - the one case where the model would
+    # have to reach into its own knowledge - take a standing subject.
+    if mode == "C" and not requested_topic:
+        requested_topic, subject_terms = pick_fallback_subject(
+            spark, catalog, schema, account)
+        topic_source = "standing"
 
     # A deep dive is about how something works, not about the quarter. Handing
     # it five metrics and a page of margin arithmetic is why it kept turning
@@ -502,7 +668,14 @@ def main() -> None:
     # but "most recent 10" gave a CoWoS episode whatever McKinsey published
     # last week, which is worse than crude.
     topic_filter = ""
-    if requested_topic:
+    if subject_terms:
+        # A standing subject carries its own terms. Splitting the phrase would
+        # be worse: "big bets" has no word over four characters, so the filter
+        # would be empty and the query would pull whatever was most recent.
+        likes = " OR ".join(
+            f"lower(chunk_text) LIKE '%{t}%'" for t in subject_terms)
+        topic_filter = f"AND ({likes})"
+    elif requested_topic:
         words = [w.lower().strip(".,()") for w in requested_topic.split()
                  if len(w) > 4][:8]
         if words:
@@ -575,6 +748,7 @@ def main() -> None:
         requested_topic=requested_topic,
         reported_on=reported_on,
         reported_days_ago=reported_days_ago,
+        topic_source=topic_source,
         news="\n".join(news_lines),
         account=account,
         deltas="\n".join(delta_lines),
@@ -703,14 +877,21 @@ def main() -> None:
     # world. That is stated rather than left to look like an omission.
     def bronze_row(label, table, scoped=True):
         where = f" WHERE symbol = '{account}'" if scoped else ""
+        # NULL stays null in the JSON. `str(None)` produced the literal string
+        # "None", which is truthy and sorts above every digit, so the UI picked
+        # it as the freshest timestamp and displayed "data unknown". That only
+        # started once these counts became account-scoped: a source with no
+        # rows for THIS account - GOOG and MU have no analyst ratings at all -
+        # returns NULL where a table-wide count never did.
+        last = scalar(
+            f"SELECT max(_ingested_at) FROM {catalog}.{schema}.{table}{where}")
         return {
             "source": label,
             "table": table,
             "scope": account if scoped else "all accounts (not account-specific)",
             "rows": scalar(
                 f"SELECT count(*) FROM {catalog}.{schema}.{table}{where}", 0),
-            "last_ingested": str(scalar(
-                f"SELECT max(_ingested_at) FROM {catalog}.{schema}.{table}{where}")),
+            "last_ingested": str(last) if last is not None else None,
         }
 
     lineage = {
@@ -842,6 +1023,31 @@ def main() -> None:
         ) WHERE _r = 1
     """)
     print(f"appended {briefing_id} to {catalog}.{schema}.gold_briefing")
+
+    # Mark the queued topic used - after the episode is published, not before,
+    # so a run that dies mid-way leaves the topic outstanding rather than
+    # silently consumed. Only for a topic taken from the QUEUE: a forced topic
+    # came from the app, which marks its own.
+    # A standing subject is recorded the same way, with a NULL request_id
+    # because no rep asked for it. That is what stops the rotation repeating
+    # the same subject on the next quiet day.
+    if topic_request_id is None and topic_source == "standing" and requested_topic:
+        # Written as a DataFrame, not interpolated into SQL. Doubling the
+        # quote in `the company's history` did not survive: the row came back
+        # as "the companys history", 40 characters against 41. The rotation
+        # compares the stored topic to the list, so a lost apostrophe means
+        # that subject never matches and gets chosen again every quiet day -
+        # the exact repetition this whole item exists to stop.
+        _record_topic_usage(spark, catalog, schema, None, account,
+                            requested_topic, briefing_id)
+        print(f"standing subject recorded: {requested_topic[:60]}")
+
+    if topic_request_id is not None:
+        # Same DataFrame write, same reason - a rep's own words are far more
+        # likely to contain an apostrophe than these standing subjects are.
+        _record_topic_usage(spark, catalog, schema, topic_request_id, account,
+                            requested_topic, briefing_id)
+        print(f"topic request {topic_request_id} marked used")
 
 
 if __name__ == "__main__":
