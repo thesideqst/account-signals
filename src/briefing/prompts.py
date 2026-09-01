@@ -490,3 +490,6 @@ Reply with JSON only, no other text:
 
 Script:
 {script}"""
+
+# deliberate syntax error to prove the guard blocks a merge
+def broken(:
