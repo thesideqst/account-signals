@@ -41,7 +41,11 @@ ACCOUNTS = {
     "GOOG": {"ticker": "GOOG", "query": "Alphabet+Google",
              "terms": ["alphabet", "google", "goog", "sundar pichai", "deepmind"]},
     "MU":   {"ticker": "MU",   "query": "Micron",
-             "terms": ["micron", "\bmu\b"]},
+             # RAW string. Written as "\bmu\b" this is a backspace character,
+             # not a word boundary, so the branch never matched and MU's filter
+             # was effectively "micron" only - any headline saying just "MU"
+             # was dropped at ingest and is unrecoverable from Bronze.
+             "terms": ["micron", r"\bmu\b"]},
 }
 
 import os
