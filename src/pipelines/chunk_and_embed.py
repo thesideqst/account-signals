@@ -189,11 +189,39 @@ def silver_doc_chunks():
         )
     )
 
+    # RELEVANCE IS RE-APPLIED HERE, not only at ingest. Bronze is append-only
+    # by design, so fixing the ingest filter does not retire the rows that
+    # landed before it: 57 off-topic articles - SK Hynix and Druckenmiller
+    # filed under GOOG, Hershey and Venezuelan oil under NVDA - are still in
+    # bronze_news, still carry recent published_at dates so no recency window
+    # excludes them, and were still eligible for retrieval and citation. The
+    # ingest filter stops new ones arriving; this one stops the old ones being
+    # used. Both are needed, and neither replaces the other.
+    #
+    # Deliberately mirrors ACCOUNTS[...]["terms"] in src/ingest/news.py. The
+    # DLT pipeline and the ingest tasks do not share an import path, so the
+    # lists are duplicated and tests/test_news_relevance.py fails if they
+    # ever drift apart.
+    ACCOUNT_TERMS = {
+        "NVDA": r"nvidia|nvda|jensen huang",
+        "GOOG": r"alphabet|google|goog|sundar pichai|deepmind",
+        "MU": r"micron|\bmu\b",
+    }
+    headline_and_summary = F.lower(
+        F.concat_ws(". ", F.col("title"), F.coalesce(F.col("summary"), F.lit(""))))
+    names_the_company = F.lit(False)
+    for _sym, _pattern in ACCOUNT_TERMS.items():
+        names_the_company = F.when(
+            F.col("symbol") == F.lit(_sym),
+            headline_and_summary.rlike(_pattern),
+        ).otherwise(names_the_company)
+
     # News IS account-specific, so it carries the real symbol rather than the
     # _industry sentinel. Headlines are short, so one item is one chunk.
     news = (
         dlt.read("bronze_news")
         .filter(F.length(F.col("title")) > 0)
+        .filter(names_the_company)
         .withColumn("_r", F.row_number().over(dedupe_url))
         .filter("_r = 1")
         .withColumn(
