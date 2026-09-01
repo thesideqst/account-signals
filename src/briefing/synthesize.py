@@ -195,13 +195,36 @@ def main() -> None:
     print("metrics selected: " + ", ".join(r["metric"] for r in deltas))
 
     # Mode is needed before retrieval, because what gets retrieved depends on it.
+    #
+    # Taken from the STRONGEST signal in a short recent window, not from the
+    # latest signal_date. Those differ in exactly the case that matters most.
+    # A company reports four times a year and files after the close, so the
+    # earnings row lands on, say, 2026-08-26 - and news arrives every single
+    # day, creating a newer row on the 27th. The briefing runs 05:45 the next
+    # morning, so `max(signal_date)` found the news row and chose Mode B,
+    # skipping the quarter. Measured: NVDA's 2026-08-26 row is correctly
+    # classified A (1 filing, 1 call, 32 news) and no Mode A episode has ever
+    # been produced.
+    #
+    # A beats B beats C, and the window is the horizon over which an earnings
+    # day is still the most important thing that happened - two days, so a
+    # Friday-evening filing is still the subject on Monday morning.
+    MODE_WINDOW_DAYS = 2
     _sig = spark.sql(f"""
-        SELECT mode FROM {catalog}.{schema}.silver_daily_signals
-        WHERE symbol = '{account}' AND signal_date = (
-            SELECT max(signal_date) FROM {catalog}.{schema}.silver_daily_signals
-            WHERE symbol = '{account}')
+        SELECT mode, signal_date FROM {catalog}.{schema}.silver_daily_signals
+        WHERE symbol = '{account}'
+          AND signal_date >= date_sub(current_date(), {MODE_WINDOW_DAYS})
+        -- A first, then the most recent day within the window. Ranked
+        -- explicitly rather than relying on 'A' < 'B' < 'C' sorting, which
+        -- is true today and silently wrong the moment a mode is renamed.
+        ORDER BY CASE mode WHEN 'A' THEN 0 WHEN 'B' THEN 1 ELSE 2 END,
+                 signal_date DESC
+        LIMIT 1
     """).collect()
     mode = _sig[0]["mode"] if _sig else "C"
+    if _sig:
+        print(f"mode {mode} from signal_date {_sig[0]['signal_date']} "
+              f"(strongest signal in the last {MODE_WINDOW_DAYS} day(s))")
     if force_mode:
         mode = force_mode
         print(f"mode forced to {mode} by request")
