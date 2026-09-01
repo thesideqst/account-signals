@@ -70,6 +70,33 @@ FALLBACK_SUBJECTS = [
 MIN_SUBJECT_CHUNKS = 4
 
 
+def _record_topic_usage(spark, catalog, schema, request_id, account, topic,
+                        briefing_id):
+    """Append one topic-usage row without interpolating text into SQL.
+
+    The text is a rep's own words or a subject phrase, either of which can
+    contain a quote. Escaping it into a SQL literal lost the apostrophe in
+    "the company's history" - stored as "the companys history" - and since the
+    rotation matches the stored topic against the list, that subject would
+    never match and would be chosen again on every quiet day.
+    """
+    from datetime import datetime, timezone
+
+    spark.sql(f"""
+        CREATE TABLE IF NOT EXISTS {catalog}.{schema}.gold_topic_usage (
+            request_id BIGINT, account_id STRING, topic STRING,
+            briefing_id STRING, used_at TIMESTAMP
+        )
+    """)
+    spark.createDataFrame(
+        [(request_id, account, topic, briefing_id,
+          datetime.now(timezone.utc))],
+        "request_id bigint, account_id string, topic string, "
+        "briefing_id string, used_at timestamp",
+    ).write.mode("append").saveAsTable(
+        f"{catalog}.{schema}.gold_topic_usage")
+
+
 def pick_fallback_subject(spark, catalog, schema, account):
     """Choose a standing subject deterministically, preferring one with material.
 
@@ -906,33 +933,21 @@ def main() -> None:
     # because no rep asked for it. That is what stops the rotation repeating
     # the same subject on the next quiet day.
     if topic_request_id is None and topic_source == "standing" and requested_topic:
-        spark.sql(f"""
-            CREATE TABLE IF NOT EXISTS {catalog}.{schema}.gold_topic_usage (
-                request_id BIGINT, account_id STRING, topic STRING,
-                briefing_id STRING, used_at TIMESTAMP
-            )
-        """)
-        safe = requested_topic.replace("'", "''")
-        spark.sql(f"""
-            INSERT INTO {catalog}.{schema}.gold_topic_usage
-            SELECT CAST(NULL AS BIGINT), '{account}', '{safe}',
-                   '{briefing_id}', current_timestamp()
-        """)
+        # Written as a DataFrame, not interpolated into SQL. Doubling the
+        # quote in `the company's history` did not survive: the row came back
+        # as "the companys history", 40 characters against 41. The rotation
+        # compares the stored topic to the list, so a lost apostrophe means
+        # that subject never matches and gets chosen again every quiet day -
+        # the exact repetition this whole item exists to stop.
+        _record_topic_usage(spark, catalog, schema, None, account,
+                            requested_topic, briefing_id)
         print(f"standing subject recorded: {requested_topic[:60]}")
 
     if topic_request_id is not None:
-        spark.sql(f"""
-            CREATE TABLE IF NOT EXISTS {catalog}.{schema}.gold_topic_usage (
-                request_id BIGINT, account_id STRING, topic STRING,
-                briefing_id STRING, used_at TIMESTAMP
-            )
-        """)
-        safe_topic = requested_topic.replace("'", "''")
-        spark.sql(f"""
-            INSERT INTO {catalog}.{schema}.gold_topic_usage
-            SELECT {topic_request_id}, '{account}', '{safe_topic}',
-                   '{briefing_id}', current_timestamp()
-        """)
+        # Same DataFrame write, same reason - a rep's own words are far more
+        # likely to contain an apostrophe than these standing subjects are.
+        _record_topic_usage(spark, catalog, schema, topic_request_id, account,
+                            requested_topic, briefing_id)
         print(f"topic request {topic_request_id} marked used")
 
 
