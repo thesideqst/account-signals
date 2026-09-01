@@ -412,6 +412,15 @@ def main() -> None:
             SELECT publisher, headline, url, chunk_text, published_at
             FROM {catalog}.{schema}.silver_doc_chunks
             WHERE source_type IN ('industry_trend', 'news')
+              -- SCOPED TO THIS ACCOUNT. Industry chunks carry the sentinel
+              -- account_id '_industry' because they describe a sector rather
+              -- than a company; news carries a real ticker. Without this
+              -- clause the 'news' half of the IN swept up every OTHER
+              -- account's articles: one Micron episode recorded 28 sources of
+              -- which 10 belonged to NVDA or GOOG - Venezuelan oil, a
+              -- congressman selling Alphabet stock - and /api/sources showed
+              -- them to the rep as the sources Micron's episode used.
+              AND account_id IN ('_industry', '{account}')
               AND published_at >= date_sub(current_date(), 120)
               {topic_filter}
             ORDER BY published_at DESC LIMIT 14
@@ -546,26 +555,36 @@ def main() -> None:
         except Exception:
             return default
 
+    # Counts are SCOPED TO THIS ACCOUNT wherever the source has an account.
+    # They were table-wide, so a GOOG episode's provenance panel reported
+    # "6,828 analyst rows, last ingested today" when zero of them were GOOG -
+    # FMP's free tier is exhausted by NVDA's backfill before GOOG is reached,
+    # so that account has no ratings at all. The one panel whose entire job is
+    # to be honest about sources was quoting another company's numbers.
+    #
+    # Industry trends and macro have no account: they describe a sector and a
+    # world. That is stated rather than left to look like an omission.
+    def bronze_row(label, table, scoped=True):
+        where = f" WHERE symbol = '{account}'" if scoped else ""
+        return {
+            "source": label,
+            "table": table,
+            "scope": account if scoped else "all accounts (not account-specific)",
+            "rows": scalar(
+                f"SELECT count(*) FROM {catalog}.{schema}.{table}{where}", 0),
+            "last_ingested": str(scalar(
+                f"SELECT max(_ingested_at) FROM {catalog}.{schema}.{table}{where}")),
+        }
+
     lineage = {
         "bronze": [
-            {"source": "SEC EDGAR XBRL", "table": "bronze_xbrl_facts",
-             "rows": scalar(f"SELECT count(*) FROM {catalog}.{schema}.bronze_xbrl_facts", 0),
-             "last_ingested": str(scalar(f"SELECT max(_ingested_at) FROM {catalog}.{schema}.bronze_xbrl_facts"))},
-            {"source": "Earnings call (Roic AI)", "table": "bronze_transcript_turns",
-             "rows": scalar(f"SELECT count(*) FROM {catalog}.{schema}.bronze_transcript_turns", 0),
-             "last_ingested": str(scalar(f"SELECT max(_ingested_at) FROM {catalog}.{schema}.bronze_transcript_turns"))},
-            {"source": "News (Google, Yahoo)", "table": "bronze_news",
-             "rows": scalar(f"SELECT count(*) FROM {catalog}.{schema}.bronze_news", 0),
-             "last_ingested": str(scalar(f"SELECT max(_ingested_at) FROM {catalog}.{schema}.bronze_news"))},
-            {"source": "Analyst grades (FMP)", "table": "bronze_analyst_ratings",
-             "rows": scalar(f"SELECT count(*) FROM {catalog}.{schema}.bronze_analyst_ratings", 0),
-             "last_ingested": str(scalar(f"SELECT max(_ingested_at) FROM {catalog}.{schema}.bronze_analyst_ratings"))},
-            {"source": "Industry trends (RSS)", "table": "bronze_industry_trends",
-             "rows": scalar(f"SELECT count(*) FROM {catalog}.{schema}.bronze_industry_trends", 0),
-             "last_ingested": str(scalar(f"SELECT max(_ingested_at) FROM {catalog}.{schema}.bronze_industry_trends"))},
-            {"source": "Macro (FRED)", "table": "bronze_macro",
-             "rows": scalar(f"SELECT count(*) FROM {catalog}.{schema}.bronze_macro", 0),
-             "last_ingested": str(scalar(f"SELECT max(_ingested_at) FROM {catalog}.{schema}.bronze_macro"))},
+            bronze_row("SEC EDGAR XBRL", "bronze_xbrl_facts"),
+            bronze_row("Earnings call (Roic AI)", "bronze_transcript_turns"),
+            bronze_row("News (Google, Yahoo)", "bronze_news"),
+            bronze_row("Analyst grades (FMP)", "bronze_analyst_ratings"),
+            bronze_row("Industry trends (RSS)", "bronze_industry_trends",
+                       scoped=False),
+            bronze_row("Macro (FRED)", "bronze_macro", scoped=False),
         ],
         # The actual items, not just counts. This is the same JSON already
         # travelling with the episode, so showing the detail costs nothing
