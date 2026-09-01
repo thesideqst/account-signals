@@ -24,6 +24,54 @@ import sys
 
 
 
+# FRED returns bare numbers; the SERIES is what makes them mean something.
+# Without a unit the prompt carried "Private nonresidential fixed investment:
+# 4623.36" and the script said "climbing to 4 623" - a listener hears "four,
+# six twenty three", and the grounding guard flagged 623.36 because the space
+# split the number in two. A figure with no unit is not a fact, it is a digit
+# string, and the model will invent a unit or mangle the number rather than
+# leave a gap.
+#
+# `change` differs from `unit` on purpose: a rate that moves from 4.5 to 4.7
+# has risen by 0.2 PERCENTAGE POINTS, not 0.2 percent. That distinction is
+# exactly the kind a briefing gets wrong and sounds confident about.
+MACRO_UNITS = {
+    "DGS10":    {"unit": "percent", "change": "percentage points"},
+    "FEDFUNDS": {"unit": "percent", "change": "percentage points"},
+    "T10Y2Y":   {"unit": "percentage points", "change": "percentage points"},
+    "CPIAUCSL": {"unit": "index points, where 1982 to 1984 equals 100",
+                 "change": "index points"},
+    # Reported in billions at a seasonally adjusted annual rate. Said aloud,
+    # "4,623 billion" is worse than "$4.6 trillion", so large values scale.
+    "PNFI":     {"dollars_billions": True},
+}
+
+
+def macro_value(series_id: str, value) -> str:
+    """A FRED observation with its unit attached."""
+    if value is None:
+        return "unavailable"
+    spec = MACRO_UNITS.get(series_id)
+    if not spec:
+        return f"{value:.2f}"
+    if spec.get("dollars_billions"):
+        return (f"${value / 1000:.2f} trillion at an annual rate"
+                if abs(value) >= 1000 else f"${value:.1f} billion at an annual rate")
+    return f"{value:.2f} {spec['unit']}"
+
+
+def macro_change(series_id: str, value) -> str:
+    """How far a series moved, in the unit a MOVE is measured in."""
+    if value is None:
+        return "unavailable"
+    spec = MACRO_UNITS.get(series_id)
+    if not spec:
+        return f"{value:.2f}"
+    if spec.get("dollars_billions"):
+        return f"${abs(value):.1f} billion"
+    return f"{abs(value):.2f} {spec['change']}"
+
+
 def figures(text: str) -> set:
     """Every numeric value mentioned in a piece of text, as floats.
 
@@ -385,7 +433,7 @@ def main() -> None:
     # this account, and five series invites a paragraph of unexplained readings.
     # Rank by how much each actually moved, relative to its own level.
     macro_rows = [m.asDict() for m in spark.sql(f"""
-        SELECT series_name, latest_value, latest_date, change_90d, direction_90d
+        SELECT series_id, series_name, latest_value, latest_date, change_90d, direction_90d
         FROM {catalog}.{schema}.silver_macro_context
     """).collect()]
     def moved(m):
@@ -397,12 +445,13 @@ def main() -> None:
     macro_lines = []
     for m in macro_rows:
         d = m["direction_90d"]
+        sid = m["series_id"]
         move = ("has not moved" if d == "FLAT" else
-                f"is {d.lower()} - {abs(m['change_90d']):.2f} "
+                f"is {d.lower()} - {macro_change(sid, m['change_90d'])} "
                 f"{'higher' if d == 'RISING' else 'lower'} than three months ago")
         macro_lines.append(
-            f"- {m['series_name']}: {m['latest_value']:.2f} as of {m['latest_date']}, "
-            f"and {move}."
+            f"- {m['series_name']}: {macro_value(sid, m['latest_value'])} "
+            f"as of {m['latest_date']}, and {move}."
         )
 
     # Then industry context. These are not account-specific, so they are capped
