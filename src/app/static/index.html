@@ -117,6 +117,11 @@
      border-bottom:1px solid var(--line);white-space:nowrap}
   td{padding:6px 10px 6px 0;border-bottom:1px solid #202930;color:#c8d3da}
   .layer{color:var(--accent);font-weight:700;letter-spacing:.06em;font-size:11px}
+  .kind{display:inline-block;font-size:9.5px;font-weight:700;letter-spacing:.04em;
+        border-radius:3px;padding:1px 5px;margin-right:6px;vertical-align:1px;white-space:nowrap}
+  .kind.struct{background:#0f2a2d;color:var(--accent)}
+  .kind.unstruct{background:#2e2114;color:var(--warm)}
+  .legend{margin:10px 0 4px;font-size:12.3px;color:var(--soft);line-height:1.7}
   .ep{display:flex;justify-content:space-between;gap:12px;padding:9px 0;
       border-bottom:1px solid #202930;font-size:13.5px}
   .ep span{color:var(--soft);font-size:12.5px;white-space:nowrap}
@@ -394,18 +399,46 @@ async function postTopic(topic, origin) {
 }
 
 // ---------- lineage, freshness, queue, past episodes ----------
+// Every source is either numeric fact, computed in SQL/Spark and only narrated
+// by the model, or prose, chunked and embedded so the model can read it. That
+// split is the whole reason this pipeline has two shapes; label it rather than
+// let six flat rows imply everything was handled the same way.
+const UNSTRUCTURED_TABLES = new Set([
+  "bronze_transcript_turns", "bronze_news", "bronze_industry_trends",
+]);
+function dataKind(table) {
+  if (!table) return "structured";
+  if (table.includes("doc_chunks") || UNSTRUCTURED_TABLES.has(table)) return "unstructured";
+  return "structured";
+}
+function kindBadge(table) {
+  return dataKind(table) === "unstructured"
+    ? `<span class="kind unstruct" title="Prose — chunked, embedded, and retrieved for the model to read">TEXT</span>`
+    : `<span class="kind struct" title="Numeric — computed in SQL/Spark, the model only narrates it">SQL</span>`;
+}
+function kindCounts(rows) {
+  const s = rows.filter(r => dataKind(r.table) === "structured").length;
+  return { structured: s, unstructured: rows.length - s };
+}
+
 function renderData(lineage) {
   const bronze = lineage.bronze || [], silver = lineage.silver || [];
   const gold = lineage.gold || {};
   const bronzeRows = bronze.reduce((n, r) => n + (r.rows || 0), 0);
   const silverUsed = silver.reduce((n, r) => n + (r.used || 0), 0);
   const oldest = bronze.map(r => r.last_ingested).filter(Boolean).sort()[0];
+  const bk = kindCounts(bronze), sk = kindCounts(silver);
 
   $("#pane-data").innerHTML = `
     <div class="card">
       <h3>Where this episode came from</h3>
       <p class="why">Three stages. Each exists because the one before it would be
         the wrong place to do the next job.</p>
+      <p class="legend"><span class="kind struct">SQL</span> numeric facts — filings,
+        ratings, macro series — computed in Spark, so the model never touches the
+        arithmetic. &nbsp; <span class="kind unstruct">TEXT</span> prose — transcripts,
+        news, industry coverage — chunked and embedded, so the model reads it instead
+        of calculating from it.</p>
 
       <div class="flow">
         <div class="stage bronze">
@@ -414,8 +447,10 @@ function renderData(lineage) {
           <div class="cap">rows collected, stored exactly as the sources sent them.
             Never edited, so a provider changing format means re-reading what we
             already have rather than re-downloading years of history.</div>
+          <div class="layerwhy" style="margin:8px 0 0"><span class="kind struct">SQL</span>${bk.structured} structured
+            &nbsp; <span class="kind unstruct">TEXT</span>${bk.unstructured} unstructured</div>
           <div class="rows">${bronze.map(r => `
-            <div class="rowline"><span>${r.source}</span>
+            <div class="rowline"><span>${kindBadge(r.table)}${r.source}</span>
               <em>${(r.rows ?? 0).toLocaleString()} · ${fmtAge(r.last_ingested).text}</em></div>`).join("")}</div>
         </div>
         <div class="stage silver">
@@ -425,9 +460,11 @@ function renderData(lineage) {
             arithmetic happens — how much moved, whether margins widened, whether costs
             outran sales. Done in SQL, not by the model, so the model explains numbers
             rather than producing them.</div>
+          <div class="layerwhy" style="margin:8px 0 0"><span class="kind struct">SQL</span>${sk.structured} structured
+            &nbsp; <span class="kind unstruct">TEXT</span>${sk.unstructured} unstructured</div>
           <div class="rows">${silver.map((r, i) => `
             <div class="rowline sv" data-i="${i}" style="cursor:pointer">
-              <span>${r.note || r.table} ${(r.items || []).length ? "▸" : ""}</span>
+              <span>${kindBadge(r.table)}${r.note || r.table} ${(r.items || []).length ? "▸" : ""}</span>
               <em>${r.used ?? 0}</em></div>
             <div class="svdetail" data-i="${i}" style="display:none;padding:6px 0 10px">
               ${(r.items || []).length

@@ -33,6 +33,14 @@ LAKEBASE_ENDPOINT = os.environ.get(
     "LAKEBASE_ENDPOINT",
     "projects/account-signals-dev/branches/production/endpoints/primary",
 )
+# Hidden episodes stay in the table (a synced table permits only reads,
+# indexes and DROP, so a DELETE could never have worked) and every read has to
+# exclude them. That was remembered in two places out of seven: hide the
+# current episode and the text correctly fell back to the previous one while
+# the play button still streamed the hidden one and the episode count still
+# counted it. One constant, used everywhere, so the rule cannot be half-applied.
+NOT_HIDDEN = ("briefing_id NOT IN "
+              "(SELECT briefing_id FROM app.hidden_episodes)")
 _w = None
 
 
@@ -137,23 +145,25 @@ def accounts():
 
 def _accounts():
     with pg() as c:
-        return c.execute("""
+        return c.execute(f"""
             SELECT account_id, max(period_end) AS latest_period, count(*) AS episodes
-            FROM app.gold_briefing_serving GROUP BY account_id ORDER BY account_id
+            FROM app.gold_briefing_serving
+            WHERE {NOT_HIDDEN}
+            GROUP BY account_id ORDER BY account_id
         """).fetchall()
 
 
 @app.get("/api/briefing/{account_id}")
 def briefing(account_id: str):
     with pg() as c:
-        row = c.execute("""
+        row = c.execute(f"""
             SELECT briefing_id, account_id, period_end, generated_at, mode,
                    mode_reason, episode_title, mode_label, takeaways,
                    questions, lineage,
                    script_text, word_count, audio_path, voice
             FROM app.gold_briefing_serving
             WHERE account_id = %s
-              AND briefing_id NOT IN (SELECT briefing_id FROM app.hidden_episodes)
+              AND {NOT_HIDDEN}
             ORDER BY generated_at DESC LIMIT 1
         """, (account_id,)).fetchone()
     if not row:
@@ -168,9 +178,10 @@ def audio_check(account_id: str):
     out = {}
     try:
         with pg() as c:
-            row = c.execute("""
+            row = c.execute(f"""
                 SELECT audio_path, audio_bytes FROM app.gold_briefing_serving
-                WHERE account_id = %s ORDER BY generated_at DESC LIMIT 1
+                WHERE account_id = %s AND {NOT_HIDDEN}
+                ORDER BY generated_at DESC LIMIT 1
             """, (account_id,)).fetchone()
         out["row"] = dict(row) if row else None
     except Exception as e:
@@ -250,9 +261,10 @@ def audio(account_id: str, request: Request):
     neither - it reads the path from one and streams the file from the other.
     """
     with pg() as c:
-        row = c.execute("""
+        row = c.execute(f"""
             SELECT audio_path FROM app.gold_briefing_serving
             WHERE account_id = %s AND audio_path IS NOT NULL
+              AND {NOT_HIDDEN}
             ORDER BY generated_at DESC LIMIT 1
         """, (account_id,)).fetchone()
     if not row:
@@ -429,18 +441,50 @@ async def submit_recap(account_id: str, audio: UploadFile = File(...),
 
 @app.get("/api/grade/{account_id}")
 def grade(account_id: str):
-    """Most recent grade for this account, if grading has run since."""
+    """Most recent grade for this account, read from Unity Catalog.
+
+    This queried `app.gold_recall_grades` in Postgres inside a bare
+    `except: return {}`, with a comment saying absence was normal. It was not
+    normal: that table is not synced to Lakebase and never has been, so the
+    endpoint returned an empty object for every account on every call,
+    permanently, and the rep never saw a grade. The catch-all is what made a
+    dead endpoint look like an empty one.
+
+    Grades live in Unity Catalog, so read them there. The write-back is
+    Postgres -> UC by design; only the briefing goes the other way.
+    """
+    wh = os.environ.get("DATABRICKS_WAREHOUSE_ID", "")
+    if not wh:
+        raise HTTPException(503, "no warehouse configured for Unity Catalog reads")
     try:
-        with pg() as c:
-            row = c.execute("""
+        r = workspace().statement_execution.execute_statement(
+            warehouse_id=wh, wait_timeout="30s",
+            statement=f"""
                 SELECT recap_id, accuracy, one_line, gaps
-                FROM app.gold_recall_grades
-                WHERE account_id = %s ORDER BY graded_at DESC LIMIT 1
-            """, (account_id,)).fetchone()
-        return row or {}
-    except Exception:
-        # Grades only reach Postgres once that table is synced; absence is normal.
+                FROM {CATALOG}.{SCHEMA}.gold_recall_grades
+                WHERE account_id = '{account_id}'
+                ORDER BY graded_at DESC, recap_id DESC LIMIT 1
+            """)
+    except Exception as e:
+        raise HTTPException(502, f"grade lookup failed: {type(e).__name__}: {str(e)[:200]}")
+
+    state = r.status.state.value if r.status and r.status.state else "UNKNOWN"
+    if state != "SUCCEEDED" or r.result is None:
+        msg = (r.status.error.message if r.status and r.status.error else "") or state
+        if state == "PENDING":
+            msg = "the warehouse is still starting up - try again in a moment"
+        raise HTTPException(503, f"grade lookup did not return: {msg[:200]}")
+
+    rows = r.result.data_array or []
+    if not rows:
+        # A genuinely empty result: this account has no graded recap yet. That
+        # IS normal, and is reported as such rather than as a failure.
         return {}
+    recap_id, accuracy, one_line, gaps = rows[0]
+    return {"recap_id": recap_id,
+            "accuracy": int(accuracy) if accuracy is not None else None,
+            "one_line": one_line,
+            "gaps": gaps}
 
 
 GRADE_PROMPT = """A sales rep listened to a briefing about {account} and was asked:
@@ -611,9 +655,10 @@ def sources(account_id: str):
     import json as _json
 
     with pg() as c:
-        row = c.execute("""
+        row = c.execute(f"""
             SELECT lineage FROM app.gold_briefing_serving
-            WHERE account_id = %s ORDER BY generated_at DESC LIMIT 1
+            WHERE account_id = %s AND {NOT_HIDDEN}
+            ORDER BY generated_at DESC LIMIT 1
         """, (account_id,)).fetchone()
     if not row or not row.get("lineage"):
         return []
@@ -733,11 +778,12 @@ def run_status(run_id: int):
 def episode(briefing_id: str):
     """One past episode in full: script, questions, and what was answered."""
     with pg() as c:
-        row = c.execute("""
+        row = c.execute(f"""
             SELECT briefing_id, account_id, episode_title, mode_label, period_end,
                    generated_at, word_count, takeaways, questions, script_text,
                    audio_path
-            FROM app.gold_briefing_serving WHERE briefing_id = %s
+            FROM app.gold_briefing_serving
+            WHERE briefing_id = %s AND {NOT_HIDDEN}
         """, (briefing_id,)).fetchone()
         if not row:
             raise HTTPException(404, "no such episode")
@@ -778,9 +824,9 @@ def delete_episode(briefing_id: str):
 def audio_by_id(briefing_id: str):
     """Audio for a specific episode, so past ones stay playable."""
     with pg() as c:
-        row = c.execute("""
+        row = c.execute(f"""
             SELECT audio_path FROM app.gold_briefing_serving
-            WHERE briefing_id = %s AND audio_path IS NOT NULL
+            WHERE briefing_id = %s AND {NOT_HIDDEN} AND audio_path IS NOT NULL
         """, (briefing_id,)).fetchone()
     if not row:
         raise HTTPException(404, "no audio for that episode")
@@ -798,12 +844,12 @@ def audio_by_id(briefing_id: str):
 def episodes(account_id: str):
     """Past episodes, newest first."""
     with pg() as c:
-        return c.execute("""
+        return c.execute(f"""
             SELECT briefing_id, episode_title, mode_label, period_end,
                    generated_at, word_count
             FROM app.gold_briefing_serving
             WHERE account_id = %s
-              AND briefing_id NOT IN (SELECT briefing_id FROM app.hidden_episodes)
+              AND {NOT_HIDDEN}
             ORDER BY generated_at DESC LIMIT 30
         """, (account_id,)).fetchall()
 
