@@ -1,0 +1,283 @@
+<!doctype html>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>account_signals — walkthrough</title>
+<style>
+  :root{--bg:#0e1317;--card:#161d22;--card2:#1b242a;--ink:#e4eaee;--soft:#93a2ac;
+        --line:#2a343b;--accent:#46c6ce;--warm:#e0a05c;--good:#5fbf8f;--bad:#e0605c}
+  *{box-sizing:border-box}
+  html,body{height:100%}
+  body{margin:0;background:var(--bg);color:var(--ink);overflow:hidden;
+       font:15px/1.62 ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif}
+  .deck{position:relative;height:100vh;width:100vw;cursor:pointer}
+  .slide{position:absolute;inset:0;display:flex;flex-direction:column;
+         align-items:center;justify-content:center;padding:6vh 8vw;
+         opacity:0;pointer-events:none;transition:opacity .5s ease}
+  .slide.on{opacity:1;pointer-events:auto}
+  .kicker{font-size:12px;letter-spacing:.22em;text-transform:uppercase;
+          color:var(--accent);font-weight:700;margin-bottom:18px;
+          opacity:0;transform:translateY(10px)}
+  .slide.on .kicker{animation:up .6s ease forwards}
+  h1.big{font-size:clamp(28px,4.2vw,52px);line-height:1.14;letter-spacing:-.02em;
+         margin:0 0 20px;text-align:center;max-width:920px;
+         opacity:0;transform:translateY(14px)}
+  .slide.on h1.big{animation:up .7s .1s ease forwards}
+  .lede{font-size:clamp(14px,1.4vw,18px);color:var(--soft);max-width:680px;
+        text-align:center;margin:0;opacity:0;transform:translateY(14px)}
+  .slide.on .lede{animation:up .7s .25s ease forwards}
+  @keyframes up{to{opacity:1;transform:none}}
+  @media (prefers-reduced-motion:reduce){
+    .kicker,h1.big,.lede,.pop,.box{animation:none!important;opacity:1!important;transform:none!important}
+  }
+
+  /* pipeline slide */
+  .pipe{display:flex;align-items:center;gap:8px;flex-wrap:wrap;justify-content:center;
+        max-width:1180px;margin-top:8px}
+  .col{display:flex;flex-direction:column;gap:8px;align-items:center}
+  .box{background:var(--card);border:1px solid var(--line);border-radius:9px;
+       padding:10px 14px;font-size:12.5px;color:#c8d3da;white-space:nowrap;
+       opacity:0;transform:scale(.92)}
+  .slide.on .box{animation:pop .45s ease forwards}
+  .box.src{border-left:3px solid var(--warm)}
+  .box.bronze{border-top:3px solid #b07d4a}
+  .box.silver{border-top:3px solid #9fb0bd}
+  .box.gold{border-top:3px solid var(--accent);font-weight:600}
+  @keyframes pop{to{opacity:1;transform:none}}
+  .arrow2{color:var(--soft);font-size:20px}
+  .principle{margin-top:28px;font-size:14.5px;color:var(--ink);text-align:center;
+             opacity:0;transform:translateY(8px)}
+  .slide.on .principle{animation:up .6s 1.6s ease forwards}
+  .principle b{color:var(--accent)}
+
+  /* split slide */
+  .split{display:grid;grid-template-columns:1fr auto 1fr;gap:18px;max-width:1080px;
+         width:100%;align-items:stretch;margin-top:10px}
+  @media (max-width:820px){.split{grid-template-columns:1fr}}
+  .panel{background:var(--card);border:1px solid var(--line);border-radius:12px;
+         padding:22px;opacity:0}
+  .panel.l{transform:translateX(-24px);border-left:3px solid var(--accent)}
+  .panel.r{transform:translateX(24px);border-left:3px solid var(--warm)}
+  .slide.on .panel.l{animation:slidein .6s .3s ease forwards}
+  .slide.on .panel.r{animation:slidein .6s .45s ease forwards}
+  @keyframes slidein{to{opacity:1;transform:none}}
+  .panel .tag{font-size:11px;letter-spacing:.14em;text-transform:uppercase;
+              font-weight:700;margin-bottom:10px}
+  .panel.l .tag{color:var(--accent)}
+  .panel.r .tag{color:var(--warm)}
+  .panel .fact{font-size:16px;line-height:1.5;color:var(--ink)}
+  .panel .src{margin-top:14px;font-size:11.5px;color:var(--soft)}
+  .vs{align-self:center;color:var(--soft);font-size:13px;font-weight:700;
+      opacity:0}
+  .slide.on .vs{animation:up .5s .6s ease forwards}
+  .example{margin-top:14px;font-size:11px;color:var(--soft);opacity:0}
+  .slide.on .example{animation:up .5s .9s ease forwards}
+
+  /* code slide */
+  .codebox{background:#0b1013;border:1px solid var(--line);border-radius:12px;
+           padding:24px 28px;max-width:900px;width:100%;opacity:0;transform:translateY(10px);
+           font:13.5px/1.75 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+           color:#c8d3da;overflow:auto}
+  .slide.on .codebox{animation:up .6s .3s ease forwards}
+  .codebox .c{color:#6a7680}
+  .codebox .k{color:var(--accent)}
+  .codebox .s{color:var(--good)}
+  .cap{margin-top:16px;font-size:13px;color:var(--soft);text-align:center;max-width:640px;
+       opacity:0}
+  .slide.on .cap{animation:up .5s 1s ease forwards}
+
+  /* loop slide */
+  .loop{display:flex;gap:10px;align-items:center;flex-wrap:wrap;justify-content:center;
+        max-width:1080px;margin-top:10px}
+  .step{background:var(--card);border:1px solid var(--line);border-radius:9px;
+        padding:14px 16px;font-size:13px;color:#c8d3da;max-width:190px;text-align:center;
+        opacity:0;transform:scale(.92)}
+  .slide.on .step{animation:pop .45s ease forwards}
+  .step b{display:block;color:var(--ink);font-size:13.5px;margin-bottom:4px}
+
+  /* stack slide */
+  .chips{display:flex;gap:10px;flex-wrap:wrap;justify-content:center;max-width:820px;margin-top:8px}
+  .chip{background:var(--card2);border:1px solid var(--line);border-radius:20px;
+        padding:8px 16px;font-size:13px;color:#c8d3da;opacity:0;transform:translateY(8px)}
+  .slide.on .chip{animation:up .45s ease forwards}
+
+  /* cta slide */
+  .go{margin-top:30px;background:var(--accent);color:#062224;border:0;border-radius:9px;
+      padding:16px 30px;font-size:16px;font-weight:700;cursor:pointer;text-decoration:none;
+      display:inline-block;opacity:0;transform:translateY(10px)}
+  .slide.on .go{animation:up .6s .5s ease forwards}
+  .go:hover{filter:brightness(1.08)}
+
+  /* chrome: dots + hint */
+  .dots{position:fixed;bottom:26px;left:0;right:0;display:flex;gap:8px;justify-content:center;
+        z-index:5}
+  .dot{width:7px;height:7px;border-radius:50%;background:var(--line);transition:background .3s}
+  .dot.on{background:var(--accent)}
+  .hint{position:fixed;bottom:46px;left:0;right:0;text-align:center;color:var(--soft);
+        font-size:11.5px;letter-spacing:.04em;z-index:5;transition:opacity .8s ease}
+  .hint.gone{opacity:0}
+  .skip{position:fixed;top:22px;right:26px;font-size:11.5px;color:var(--soft);
+        text-decoration:none;z-index:5;letter-spacing:.02em}
+  .skip:hover{color:var(--accent)}
+</style>
+
+<div class="deck" id="deck">
+
+  <section class="slide on" data-i="0">
+    <div class="kicker">a daily briefing for strategic accounts</div>
+    <h1 class="big">What did the quarter actually do —<br>versus how management framed it?</h1>
+    <p class="lede">Reading the filing, the call, and the news takes hours. Telling the two
+      apart — the number versus the story told about it — is the part worth automating.</p>
+  </section>
+
+  <section class="slide" data-i="1">
+    <div class="kicker">six sources, one pipeline</div>
+    <div class="pipe">
+      <div class="col">
+        <div class="box src" style="animation-delay:.05s">SEC EDGAR</div>
+        <div class="box src" style="animation-delay:.1s">Earnings calls</div>
+        <div class="box src" style="animation-delay:.15s">News</div>
+        <div class="box src" style="animation-delay:.2s">Analyst ratings</div>
+        <div class="box src" style="animation-delay:.25s">Industry RSS</div>
+        <div class="box src" style="animation-delay:.3s">FRED macro</div>
+      </div>
+      <div class="arrow2" style="animation-delay:.35s">→</div>
+      <div class="col">
+        <div class="box bronze" style="animation-delay:.4s">Bronze<br><small style="color:var(--soft)">raw</small></div>
+      </div>
+      <div class="arrow2">→</div>
+      <div class="col">
+        <div class="box silver" style="animation-delay:.5s">Silver</div>
+        <div class="box silver" style="animation-delay:.58s;font-size:11.5px">financial deltas</div>
+        <div class="box silver" style="animation-delay:.66s;font-size:11.5px">metric context</div>
+        <div class="box silver" style="animation-delay:.74s;font-size:11.5px">doc chunks</div>
+      </div>
+      <div class="arrow2" style="animation-delay:.8s">→</div>
+      <div class="col">
+        <div class="box gold" style="animation-delay:.9s">Briefing script</div>
+        <div class="box gold" style="animation-delay:1s">→ TTS → MP3</div>
+      </div>
+    </div>
+    <p class="principle">Numbers are computed in <b>SQL</b>, joined on explicit period dates.
+      The model never derives a figure — it narrates one already computed.</p>
+  </section>
+
+  <section class="slide" data-i="2">
+    <div class="kicker">the whole product is this contrast</div>
+    <h1 class="big" style="font-size:clamp(22px,2.6vw,30px);margin-bottom:26px">Two inputs, deliberately different shapes</h1>
+    <div class="split">
+      <div class="panel l">
+        <div class="tag">Measured</div>
+        <div class="fact">"Operating margin <b>COMPRESSED</b> by 209 basis points versus last quarter."</div>
+        <div class="src">silver_metric_context — GOOG, period ending Jun 30 2026. Computed in SQL, direction stated in words</div>
+      </div>
+      <div class="vs">vs</div>
+      <div class="panel r">
+        <div class="tag">Framed</div>
+        <div class="fact">"Q2 represented another strong quarter."</div>
+        <div class="src">silver_doc_chunks — Anat Ashkenazi, CFO, Alphabet Q2 2026 earnings call</div>
+      </div>
+    </div>
+    <p class="example">Real data, both sides. The model narrates both, side by side —
+      it doesn't compute the gap or explain a cause, it lets you hear where they don't match.</p>
+  </section>
+
+  <section class="slide" data-i="3">
+    <div class="kicker">not a prompt — this is the actual source</div>
+    <div class="codebox"><pre style="margin:0;white-space:pre-wrap"><span class="c"># src/briefing/synthesize.py</span>
+<span class="c">"""Silver -> gold_briefing. Picks a mode, then writes the script.</span>
+
+<span class="c">Two inputs arrive in deliberately different shapes and the contrast</span>
+<span class="c">between them is the product:</span>
+
+<span class="k">  measured</span>   silver_financial_deltas, already computed. The model is told
+             these numbers and narrates them. <span class="s">It does not calculate.</span>
+<span class="k">  framed</span>     silver_doc_chunks, what management said on the call,
+             attributed to a named speaker and tagged prepared_remarks or qa.
+<span class="c">"""</span></pre></div>
+    <p class="cap">Verbatim from the repo. The invariant isn't a style rule — it's the
+      line at which the LLM's authority over a number ends.</p>
+  </section>
+
+  <section class="slide" data-i="4">
+    <div class="kicker">closing the loop</div>
+    <h1 class="big" style="font-size:clamp(22px,2.6vw,30px);margin-bottom:22px">The rep is graded, not just informed</h1>
+    <div class="loop">
+      <div class="step" style="animation-delay:.05s"><b>Listen</b>10-minute narrated episode</div>
+      <div class="arrow2" style="animation-delay:.1s">→</div>
+      <div class="step" style="animation-delay:.2s"><b>Answer</b>3 comprehension questions, out loud</div>
+      <div class="arrow2" style="animation-delay:.25s">→</div>
+      <div class="step" style="animation-delay:.35s"><b>Grade</b>scored the moment they stop speaking</div>
+      <div class="arrow2" style="animation-delay:.4s">→</div>
+      <div class="step" style="animation-delay:.5s"><b>Close the gap</b>what they missed queues tomorrow's episode</div>
+    </div>
+  </section>
+
+  <section class="slide" data-i="5">
+    <div class="kicker">built with</div>
+    <div class="chips">
+      <div class="chip" style="animation-delay:.05s">Declarative Automation Bundles</div>
+      <div class="chip" style="animation-delay:.12s">Lakeflow Declarative Pipelines</div>
+      <div class="chip" style="animation-delay:.19s">Unity Catalog</div>
+      <div class="chip" style="animation-delay:.26s">Lakebase Postgres</div>
+      <div class="chip" style="animation-delay:.33s">Databricks Apps</div>
+      <div class="chip" style="animation-delay:.4s">Foundation Model APIs</div>
+      <div class="chip" style="animation-delay:.47s">Serverless compute</div>
+    </div>
+    <p class="cap" style="animation-delay:1s">End to end, built with Claude Code against the Databricks CLI.</p>
+  </section>
+
+  <section class="slide" data-i="6">
+    <div class="kicker">now, live</div>
+    <h1 class="big">See it running.</h1>
+    <p class="lede">The actual app — real episodes, real audio, the recall loop.</p>
+    <a class="go" href="/" onclick="event.stopPropagation()">Enter the app →</a>
+  </section>
+
+</div>
+
+<div class="dots" id="dots"></div>
+<div class="hint" id="hint">click, space, or → to continue</div>
+<a class="skip" href="/" onclick="event.stopPropagation()">skip to app</a>
+
+<script>
+  const slides = [...document.querySelectorAll('.slide')];
+  const dotsEl = document.getElementById('dots');
+  const hint = document.getElementById('hint');
+  let i = 0;
+
+  slides.forEach((_, n) => {
+    const d = document.createElement('div');
+    d.className = 'dot' + (n === 0 ? ' on' : '');
+    dotsEl.appendChild(d);
+  });
+  const dots = [...dotsEl.children];
+
+  function show(n) {
+    n = Math.max(0, Math.min(slides.length - 1, n));
+    if (n === i) return;
+    slides[i].classList.remove('on');
+    // Force reflow so re-entering a slide replays its animations.
+    void slides[n].offsetWidth;
+    slides[n].classList.add('on');
+    dots[i].classList.remove('on');
+    dots[n].classList.add('on');
+    i = n;
+  }
+
+  function next() { show(i + 1); }
+  function prev() { show(i - 1); }
+
+  function dismissHint() {
+    hint.classList.add('gone');
+  }
+
+  document.getElementById('deck').addEventListener('click', (e) => {
+    dismissHint();
+    next();
+  });
+  window.addEventListener('keydown', (e) => {
+    if (e.key === 'ArrowRight' || e.key === ' ') { e.preventDefault(); dismissHint(); next(); }
+    if (e.key === 'ArrowLeft') { e.preventDefault(); dismissHint(); prev(); }
+  });
+  setTimeout(dismissHint, 5000);
+</script>
