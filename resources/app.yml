@@ -1,12 +1,21 @@
 # Audio-first briefing app. Reads from Lakebase (millisecond lookups),
 # not from Delta (built for scans, not single-row fetches).
-# Env vars live in ../src/app/app.yaml, not here.
+#
+# The Lakebase wiring below is templated from bundle variables, so it follows
+# whatever workspace you deploy into. The app's own env is NOT - see the note
+# on `config:` below. Env vars live in ../src/app/app.yaml.
 resources:
   apps:
     briefing_app:
       name: account-signals-${bundle.target}
       description: Daily audio briefing and spoken recall for strategic accounts.
       source_code_path: ../src/app
+      # A `config:` block with command/env belongs here in principle, and the
+      # bundle schema accepts one - but this workspace's Apps API silently
+      # ignores it. Deployed with config here and no app.yaml, the app got no
+      # start command and exited immediately, and `apps get` returns no config
+      # field at all. So command and env stay in ../src/app/app.yaml, which is
+      # the one place in this repo still needing a hand-edit per workspace.
       resources:
         # Attaching the Lakebase project makes Databricks inject PGHOST,
         # PGUSER, PGDATABASE and PGPORT at runtime, so the app never holds a
@@ -23,9 +32,9 @@ resources:
         # exist, because the backing store was never an instance.
         - name: postgres
           postgres:
-            branch: projects/account-signals-dev/branches/production
+            branch: projects/${var.lakebase_project}/branches/${var.lakebase_branch}
             # Full resource path, and note the DATABASE ID is hyphenated
             # (databricks-postgres) while the Postgres database it maps to is
             # underscored (databricks_postgres). The API wants the id.
-            database: projects/account-signals-dev/branches/production/databases/databricks-postgres
+            database: projects/${var.lakebase_project}/branches/${var.lakebase_branch}/databases/${var.lakebase_database}
             permission: CAN_CONNECT_AND_CREATE

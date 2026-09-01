@@ -15,7 +15,9 @@ variables:
     description: Schema holding bronze/silver/gold tables.
     default: account_signals_dev
   warehouse_id:
-    description: SQL warehouse used by the app and ad-hoc queries.
+    description: >-
+      SQL warehouse used by the app and ad-hoc queries. Workspace-specific:
+      find yours with `databricks warehouses list`.
     default: c183f02d121f496a
   llm_endpoint:
     description: Foundation model endpoint for synthesis and grading.
@@ -40,8 +42,22 @@ variables:
       app simply shows the previous episode until the sync runs on its own.
     default: fbcc82c7-e931-41b0-b268-fc6014e3d207
   lakebase_project:
-    description: Lakebase Autoscaling project serving the app.
+    description: >-
+      Lakebase Autoscaling project serving the app. Workspace-specific: list
+      yours with `databricks postgres list-projects`.
     default: account-signals-dev
+  lakebase_branch:
+    description: >-
+      Branch within the Lakebase project. `production` is what a new project is
+      created with; confirm with
+      `databricks postgres list-branches projects/<project>`.
+    default: production
+  lakebase_database:
+    description: >-
+      Database ID within the branch, HYPHENATED even though the Postgres
+      database it maps to is underscored (databricks_postgres). Confirm with
+      `databricks postgres list-databases projects/<project>/branches/<branch>`.
+    default: databricks-postgres
 
 targets:
   dev:

@@ -55,14 +55,22 @@ aren't there:
   `schedule.pause_status: UNPAUSED` explicitly, overriding that default
   (SCOPE.md, 2026-08-30). Don't assume a dev deploy is inert.
 
-**Workspace-specific IDs to update on a fresh deploy** — none of these
-follow `databricks.yml`'s variables automatically into the app:
+**Workspace-specific IDs to update on a fresh deploy.** See README.md >
+"Deploying to your own workspace" for the command that finds each one.
 
-- `databricks.yml`: `warehouse_id`, `sync_pipeline_id` (from
-  `databricks postgres get-synced-table <name>`), `lakebase_project`.
+- `databricks.yml` variables, overridable with `--var=` and needing no file
+  edit: `warehouse_id`, `sync_pipeline_id` (from
+  `databricks postgres get-synced-table <name>`), `lakebase_project`,
+  `lakebase_branch`, `lakebase_database`. The app's Lakebase resource in
+  `resources/app.yml` is templated from these, so that path follows the target.
 - `src/app/app.yaml`: `BRIEFING_JOB_ID`, `DATABRICKS_WAREHOUSE_ID`,
-  `LAKEBASE_ENDPOINT` — hardcoded here rather than templated from bundle
-  variables.
+  `LAKEBASE_ENDPOINT`, `SCHEMA` — hardcoded, and they have to be. The file is
+  copied into the workspace verbatim with no `${var...}` substitution, and the
+  bundle's `config:` block, which would be the templated alternative, is
+  accepted by the schema and then silently ignored by the Apps API: deployed
+  that way with no `app.yaml`, the app gets no start command and exits.
+  `BRIEFING_JOB_ID` only exists after the first deploy, so a fresh workspace
+  deploys twice.
 
 ## Repo-specific gotchas (verified in code)
 
