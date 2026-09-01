@@ -78,10 +78,26 @@ def main() -> None:
     key = fmp_key()
 
     grades, summaries = [], []
-    for symbol, ticker in ACCOUNTS.items():
-      # One symbol hitting a tier limit should not cost the other two their
-      # data. FMP returns 402 once the free plan's ceiling is reached, and it
-      # can happen partway through the list.
+    failed = []
+
+    # ROTATE THE ORDER. FMP returns 402 once the free plan's ceiling is
+    # reached, partway through the list - and with a fixed order the same
+    # accounts lose every single time. Measured before this change: NVDA had
+    # 6,828 rating rows and GOOG and MU had ZERO, in every run, because
+    # iteration always started at NVDA. Rotating by day means a tier limit
+    # costs a different account each day instead of permanently starving the
+    # last two, so `silver_rating_changes` eventually covers everyone.
+    from datetime import date
+
+    names = list(ACCOUNTS)
+    shift = date.today().toordinal() % len(names)
+    order = names[shift:] + names[:shift]
+    print(f"symbol order today: {', '.join(order)}")
+
+    for symbol in order:
+      ticker = ACCOUNTS[symbol]
+      # One symbol hitting a tier limit should not cost the others their data.
+      before_g, before_s = len(grades), len(summaries)
       try:
         for rec in get("grades", key, symbol=ticker) or []:
             grades.append({
@@ -100,11 +116,27 @@ def main() -> None:
                 "strong_sell": rec.get("strongSell"),
                 "consensus": rec.get("consensus"),
             })
-        print(f"{symbol}: {len(grades)} grade actions, {len(summaries)} consensus rows")
+        # Counts for THIS symbol. These were len(grades)/len(summaries), the
+        # running totals, so every line after the first overstated its symbol.
+        print(f"{symbol}: {len(grades) - before_g} grade actions, "
+              f"{len(summaries) - before_s} consensus rows")
       except Exception as e:
         code = getattr(e, "code", "")
         note = " (free tier limit)" if code == 402 else ""
         print(f"{symbol}: FAILED {type(e).__name__} {code}{note} - continuing")
+        failed.append(f"{symbol} ({type(e).__name__} {code}{note})")
+
+    # A partial pull is the failure mode that looks like success: the task
+    # exits 0, the table gains rows, and two of three accounts silently have
+    # no analyst signal at all - which then shows up as confident coverage in
+    # a briefing's provenance panel. Say it loudly, and fail outright if the
+    # whole source is down rather than reporting a clean run.
+    if failed:
+        print(f"RATINGS WARNING - no data for {len(failed)} of {len(order)} "
+              f"account(s): {'; '.join(failed)}")
+    if len(failed) == len(order):
+        raise RuntimeError(
+            f"ratings ingest got nothing for any account: {'; '.join(failed)}")
 
     if grades:
         bronze_write(spark().createDataFrame(grades, schema=GRADES_SCHEMA),

@@ -93,13 +93,25 @@ def main() -> None:
 
     rows = []
     for r in todo:
+        # The episode the rep ACTUALLY HEARD: the most recent one that existed
+        # when they recorded. This used to take the newest briefing outright,
+        # which graded people against a script that did not exist yet - recap 1
+        # was scored against an episode generated about twenty hours after the
+        # rep spoke. That does not just produce a wrong score: the gaps it
+        # invents become the callback in the next episode.
         brief = spark.sql(f"""
             SELECT briefing_id, script_text FROM {catalog}.{schema}.gold_briefing
             WHERE account_id = '{r['account_id']}'
+              AND generated_at <= TIMESTAMP '{r['created_at']}'
             ORDER BY generated_at DESC LIMIT 1
         """).collect()
         if not brief:
-            print(f"  recap {r['recap_id']}: no briefing for {r['account_id']}, skipping")
+            # Grading against an episode they demonstrably did not hear is
+            # worse than not grading: the score is meaningless and the gap
+            # feeds the next cold open. Leave it ungraded and say why.
+            print(f"  recap {r['recap_id']}: no {r['account_id']} episode existed "
+                  f"at {r['created_at']}, skipping rather than grading against "
+                  f"a script the rep never heard")
             continue
 
         resp = w.serving_endpoints.query(
