@@ -1,0 +1,41 @@
+# Offline checks. Deliberately no workspace credentials.
+#
+# `databricks bundle validate` is the check you would expect here and it cannot
+# run: with `mode: development` it makes a live SCIM call to resolve the
+# username for resource prefixing, so it needs a real workspace token. Putting
+# one in GitHub secrets to lint YAML is a bad trade for a public repo, so this
+# runs the half that needs no workspace and the README documents the rest.
+name: checks
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install test dependencies
+        run: pip install --quiet pytest pyyaml jsonschema
+
+      - name: Install Databricks CLI
+        # Only used for `bundle schema`, which needs no authentication.
+        run: curl -fsSL https://raw.githubusercontent.com/databricks/setup-cli/main/install.sh | sh -s 1.14.1
+
+      - name: Python compiles
+        # Catches syntax errors in job and pipeline code that would otherwise
+        # only surface when a task starts on serverless, minutes into a run.
+        run: python -m compileall -q src
+
+      - name: Unit tests
+        run: pytest tests -q
+
+      - name: Bundle schema
+        run: python scripts/check_bundle.py

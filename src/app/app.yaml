@@ -1,3 +1,8 @@
+# Runtime config for the app. HAND-EDIT THESE when deploying to another
+# workspace: this file is copied in verbatim and gets no ${var...} substitution.
+# The bundle's `config:` block would be the templated alternative, but this
+# workspace's Apps API silently ignores it - see resources/app.yml.
+# README.md > "Deploying to your own workspace" lists how to find each value.
 command:
   - uvicorn
   - app:app
@@ -9,16 +14,19 @@ command:
 env:
   - name: CATALOG
     value: workspace
+  # Must match the target you deploy: account_signals_dev or _prod.
   - name: SCHEMA
     value: account_signals_dev
   # Lets the app run the briefing job on demand for a queued topic.
+  # `databricks jobs list` after the first deploy.
   - name: BRIEFING_JOB_ID
     value: '175641655518601'
   # Lets the app read Unity Catalog as well as Postgres, so the write-back can
-  # be shown from both ends.
+  # be shown from both ends. `databricks warehouses list`.
   - name: DATABRICKS_WAREHOUSE_ID
     value: c183f02d121f496a
+  # `databricks postgres list-projects`, then list-branches for the branch.
   - name: LAKEBASE_ENDPOINT
     value: projects/account-signals-dev/branches/production/endpoints/primary
-  # Lakebase injects PGHOST / PGDATABASE / PGUSER / PGPASSWORD / PGPORT when a
-  # postgres resource is attached to the app. No connection string is stored here.
+  # Lakebase injects PGHOST / PGDATABASE / PGUSER / PGPORT when a postgres
+  # resource is attached to the app. No connection string is stored here.

@@ -98,6 +98,13 @@ def health():
         "pghost": os.environ.get("PGHOST", "(not injected)"),
         "pguser": os.environ.get("PGUSER", "(not injected)"),
         "catalog": CATALOG, "schema": SCHEMA,
+        # These come from the bundle, which substitutes ${var...} and
+        # ${resources...} on deploy. An UNRESOLVED value shows up here as the
+        # literal placeholder rather than a number, which is the only cheap way
+        # to tell "templated correctly" from "templated into a string".
+        "briefing_job_id": os.environ.get("BRIEFING_JOB_ID", "(not set)"),
+        "warehouse_id": os.environ.get("DATABRICKS_WAREHOUSE_ID", "(not set)"),
+        "lakebase_endpoint": LAKEBASE_ENDPOINT,
     }
     try:
         w = workspace()

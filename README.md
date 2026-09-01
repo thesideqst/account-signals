@@ -101,6 +101,52 @@ databricks bundle run briefing -t dev   # write and narrate the episode
 databricks bundle run grading  -t dev   # bring recaps back, grade them
 ```
 
+## Deploying to your own workspace
+
+The bundle's defaults point at the workspace it was built in. Most of them
+follow `databricks.yml` variables and can be overridden on the command line;
+one file has to be edited by hand.
+
+**1. Find your own values.** Each of these is a single command:
+
+```bash
+databricks warehouses list                       # warehouse_id
+databricks postgres list-projects                # lakebase_project
+databricks postgres list-branches projects/<project>              # lakebase_branch
+databricks postgres list-databases projects/<project>/branches/<branch>   # lakebase_database
+databricks jobs list                             # BRIEFING_JOB_ID, after the first deploy
+databricks postgres get-synced-table <name>      # sync_pipeline_id
+```
+
+**2. Override the bundle variables.** No file edit needed:
+
+```bash
+databricks bundle deploy -t dev \
+  --var="warehouse_id=<yours>" \
+  --var="lakebase_project=<yours>" \
+  --var="sec_contact=you@example.com"
+```
+
+Or change the `default:` under `variables:` in `databricks.yml` if you would
+rather not repeat the flags. `catalog`, `schema`, the model endpoints and the
+whole Lakebase path are all wired through this way.
+
+**3. Edit `src/app/app.yaml` by hand.** This is the one exception, and it is a
+platform constraint rather than an oversight: the file is copied into the
+workspace verbatim and gets no `${var...}` substitution. The bundle's `config:`
+block would be the templated alternative, but this workspace's Apps API accepts
+it and then silently ignores it — deployed that way with no `app.yaml`, the app
+receives no start command and exits immediately. So set `BRIEFING_JOB_ID`,
+`DATABRICKS_WAREHOUSE_ID`, `LAKEBASE_ENDPOINT` and `SCHEMA` there directly.
+
+`BRIEFING_JOB_ID` only exists after the first deploy, so the sequence is:
+deploy once, read the job id, put it in `app.yaml`, deploy again. Until then
+everything works except generating an episode on demand from a queued topic.
+
+**4. Secrets are never in the repo.** They live in the `account_signals` secret
+scope created above, and are read inside tasks via `dbutils.secrets.get` rather
+than passed as job parameters.
+
 ## Layout
 
 ```
