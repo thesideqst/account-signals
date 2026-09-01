@@ -8,11 +8,24 @@ resources:
       description: Daily audio briefing and spoken recall for strategic accounts.
       source_code_path: ../src/app
       resources:
-        # Attaching the Lakebase project makes Databricks inject
-        # PGHOST/PGUSER/PGPASSWORD at runtime, so the app never holds a
+        # Attaching the Lakebase project makes Databricks inject PGHOST,
+        # PGUSER, PGDATABASE and PGPORT at runtime, so the app never holds a
         # connection string and authenticates as its own service principal.
+        # It does NOT inject PGPASSWORD - Autoscaling authenticates with a
+        # short-lived OAuth token, which `pg()` mints itself.
+        #
+        # This is `postgres:`, NOT `database:`. They are two different backends
+        # with near-identical config: `database:` takes an instance_name and
+        # refers to a legacy Lakebase database INSTANCE, while this project is
+        # Lakebase Autoscaling, addressed by branch path. Declaring the wrong
+        # one failed the whole `bundle deploy` with "Database instance
+        # account-signals-dev does not exist" - the instance genuinely does not
+        # exist, because the backing store was never an instance.
         - name: postgres
-          database:
-            instance_name: account-signals-dev
-            database_name: databricks_postgres
+          postgres:
+            branch: projects/account-signals-dev/branches/production
+            # Full resource path, and note the DATABASE ID is hyphenated
+            # (databricks-postgres) while the Postgres database it maps to is
+            # underscored (databricks_postgres). The API wants the id.
+            database: projects/account-signals-dev/branches/production/databases/databricks-postgres
             permission: CAN_CONNECT_AND_CREATE

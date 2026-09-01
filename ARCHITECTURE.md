@@ -286,6 +286,22 @@ and left no trace. None raised an error; each looked fine until something
 downstream was checked. Where a step matters, check its effect rather than its
 exit code.
 
+The audio player was a fifth instance, and the sharpest one: the endpoint sent
+`Accept-Ranges: bytes` without implementing ranges, so it advertised a
+capability it did not have. Chrome believed the header, asked for a range, got
+the whole file back under a 200, and stalled with no duration. The bytes were
+always fine. A comment above that code even claimed range support had been
+added to fix exactly this - only `Content-Length` ever was, so the note read as
+done while half of it was missing. **A header is a promise the code has to
+keep**, and a comment saying something was fixed is not evidence that it was.
+
+Attaching the Lakebase resource produced a sixth, within the fix itself.
+`apps deploy` reported "App started successfully" while every route returned
+500, because `pg()` read `PGHOST` as proof that a full set of credentials had
+been injected and then required a `PGPASSWORD` that Lakebase Autoscaling never
+sends. A clean deploy status describes the process starting, not the app
+working. Verify by calling the thing.
+
 ### Platform
 
 **Lakebase CDF is unavailable on Free Edition**, so the recap write-back runs
@@ -342,9 +358,10 @@ window but rules out longer backfills.
 commercial use or redistribution. This is portfolio work shown to employers,
 which is a grey area worth reading rather than assuming.
 
-**`rating_changes.py` is written but not wired into the pipeline**, because
-`bronze_analyst_ratings` does not exist until the FMP ingest is implemented,
-and one unresolvable table fails the whole pipeline run.
+**`rating_changes.py` is wired in.** The `analyst_ratings` ingest task
+(`resources/ingest.job.yml`) writes `bronze_analyst_ratings`, and
+`rating_changes.py` is a library in `resources/signals.pipeline.yml`,
+producing `silver_rating_changes`.
 
 ## Known constraints
 

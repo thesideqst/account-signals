@@ -19,7 +19,7 @@ import os
 import psycopg
 from databricks.sdk import WorkspaceClient
 from databricks.sdk.service.serving import ChatMessage, ChatMessageRole
-from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi import Response
 from fastapi.responses import HTMLResponse
 from psycopg.rows import dict_row
@@ -51,11 +51,19 @@ def pg():
     what makes this runnable before the resource is wired up.
     """
     if os.environ.get("PGHOST"):
+        # Lakebase AUTOSCALING injects PGHOST/PGUSER but NOT PGPASSWORD: it
+        # authenticates with a short-lived OAuth token rather than a static
+        # password. Only the legacy database-instance resource injects one.
+        # Requiring PGPASSWORD here took down every endpoint the moment the
+        # resource was attached, with KeyError: 'PGPASSWORD'.
+        password = os.environ.get("PGPASSWORD") or workspace(
+            ).postgres.generate_database_credential(
+                endpoint=LAKEBASE_ENDPOINT).token
         return psycopg.connect(
             host=os.environ["PGHOST"],
             dbname=os.environ.get("PGDATABASE", "databricks_postgres"),
             user=os.environ["PGUSER"],
-            password=os.environ["PGPASSWORD"],
+            password=password,
             port=os.environ.get("PGPORT", "5432"),
             sslmode="require",
             row_factory=dict_row,
@@ -181,8 +189,54 @@ def audio_check(account_id: str):
     return out
 
 
+def _parse_range(header, total: int):
+    """Parse a single-range `Range: bytes=...` header against a file size.
+
+    Returns (start, end) inclusive, None to serve the whole body, or the
+    string "unsatisfiable" for a well-formed range that falls outside the
+    file. A malformed header returns None rather than an error: RFC 7233 says
+    a range you cannot parse must be ignored, not rejected.
+
+    Multi-range requests are deliberately treated as no range. They require a
+    multipart/byteranges body, no browser media element asks for one, and the
+    whole file is always a legal answer to a Range request.
+    """
+    if not header:
+        return None
+    header = header.strip()
+    if not header.startswith("bytes="):
+        return None
+    spec = header[len("bytes="):].strip()
+    if "," in spec:
+        return None
+
+    start_s, dash, end_s = spec.partition("-")
+    if not dash:
+        return None
+    try:
+        if not start_s:
+            # `bytes=-N` means the LAST n bytes, not "from 0 to n".
+            n = int(end_s)
+            if n <= 0:
+                return "unsatisfiable"
+            start, end = max(0, total - n), total - 1
+        else:
+            start = int(start_s)
+            # `bytes=N-` is open ended: from N to the end of the file.
+            end = int(end_s) if end_s else total - 1
+    except ValueError:
+        return None
+
+    if start < 0 or start >= total:
+        return "unsatisfiable"
+    end = min(end, total - 1)
+    if end < start:
+        return "unsatisfiable"
+    return start, end
+
+
 @app.get("/api/audio/{account_id}")
-def audio(account_id: str):
+def audio(account_id: str, request: Request):
     """Stream the MP3 out of the Unity Catalog Volume.
 
     The path lives in Postgres; the bytes live in the Volume. The app holds
@@ -202,17 +256,40 @@ def audio(account_id: str):
     except Exception as e:
         raise HTTPException(500, f"volume read failed: {type(e).__name__}: {str(e)[:200]}")
 
-    # Read fully rather than streaming the SDK's file object. The browser needs
-    # Content-Length and range support to show a duration and let you scrub;
-    # a bare stream plays as 0:00/0:00.
+    # Read fully rather than streaming the SDK's file object, so the length is
+    # known and any byte range can be served from memory. These files are a few
+    # megabytes; if they ever get big, fetch only the requested range from the
+    # Volume instead of downloading the whole thing per request.
     data = resp.contents.read()
-    return Response(
-        content=data,
-        media_type="audio/mpeg",
-        headers={"Content-Length": str(len(data)),
-                 "Accept-Ranges": "bytes",
-                 "Cache-Control": "no-cache"},
-    )
+    total = len(data)
+
+    # Accept-Ranges was previously sent WITHOUT any Range handling, and that
+    # combination is what broke playback: Chrome asks for a range, gets a 200
+    # carrying the whole body, and stalls at readyState 0 with no duration -
+    # the 0:00/0:00 player. Advertising the capability obliges us to honour it.
+    rng = _parse_range(request.headers.get("range"), total)
+
+    if rng == "unsatisfiable":
+        # 416 must state the real size so the client can retry sensibly.
+        return Response(
+            status_code=416,
+            headers={"Content-Range": f"bytes */{total}",
+                     "Accept-Ranges": "bytes"},
+        )
+
+    headers = {"Accept-Ranges": "bytes", "Cache-Control": "no-cache"}
+
+    if rng is None:
+        headers["Content-Length"] = str(total)
+        return Response(content=data, media_type="audio/mpeg", headers=headers)
+
+    start, end = rng
+    chunk = data[start:end + 1]
+    headers["Content-Length"] = str(len(chunk))
+    # Both ends are INCLUSIVE, and the total is the full file, not the slice.
+    headers["Content-Range"] = f"bytes {start}-{end}/{total}"
+    return Response(content=chunk, status_code=206,
+                    media_type="audio/mpeg", headers=headers)
 
 
 def stt_key() -> str:
