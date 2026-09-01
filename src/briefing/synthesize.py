@@ -727,7 +727,31 @@ def main() -> None:
           AND published_at >= date_sub(current_date(), 10)
         ORDER BY published_at DESC LIMIT 18
     """).collect()
-    news_lines = [source_line(n, 260) for n in news_rows]
+    # SEC filings for this account: 8-K press releases and CFO commentary.
+    # These are the substantive half of "news" - 202 of 209 filing chunks carry
+    # more than 300 characters, against 30 of 610 news chunks - so they are
+    # retrieved separately and placed FIRST, ahead of the headlines. A headline
+    # says what is being talked about; a filing says what actually happened,
+    # in the company's own words.
+    filing_rows = spark.sql(f"""
+        SELECT publisher, headline, url, chunk_text, published_at, section
+        FROM {catalog}.{schema}.silver_doc_chunks
+        WHERE source_type = 'filing' AND account_id = '{account}'
+          AND published_at >= date_sub(current_date(), 120)
+        ORDER BY published_at DESC, char_count DESC
+        LIMIT 8
+    """).collect()
+    # A filing carries WHY it was filed, in words, from the 8-K item code.
+    filing_lines = [
+        f"- KIND: ARTICLE | PUBLICATION: SEC filing"
+        f" | HEADLINE: {f['headline']} | DATE: {f['published_at']}"
+        f" | FILED BECAUSE: {f['section'] or 'not stated'}"
+        f" | TEXT: {(f['chunk_text'] or '')[:900]}"
+        for f in filing_rows
+    ]
+    print(f"filings: {len(filing_lines)} passage(s) from SEC 8-K documents")
+
+    news_lines = filing_lines + [source_line(n, 260) for n in news_rows]
     stubs = sum(1 for n in news_rows
                 if len((n["chunk_text"] or "").strip()) <= STUB_CHARS)
     print(f"news: {len(news_lines)} items, {stubs} of them headline-only")
