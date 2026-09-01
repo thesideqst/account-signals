@@ -681,14 +681,21 @@ def main() -> None:
     # world. That is stated rather than left to look like an omission.
     def bronze_row(label, table, scoped=True):
         where = f" WHERE symbol = '{account}'" if scoped else ""
+        # NULL stays null in the JSON. `str(None)` produced the literal string
+        # "None", which is truthy and sorts above every digit, so the UI picked
+        # it as the freshest timestamp and displayed "data unknown". That only
+        # started once these counts became account-scoped: a source with no
+        # rows for THIS account - GOOG and MU have no analyst ratings at all -
+        # returns NULL where a table-wide count never did.
+        last = scalar(
+            f"SELECT max(_ingested_at) FROM {catalog}.{schema}.{table}{where}")
         return {
             "source": label,
             "table": table,
             "scope": account if scoped else "all accounts (not account-specific)",
             "rows": scalar(
                 f"SELECT count(*) FROM {catalog}.{schema}.{table}{where}", 0),
-            "last_ingested": str(scalar(
-                f"SELECT max(_ingested_at) FROM {catalog}.{schema}.{table}{where}")),
+            "last_ingested": str(last) if last is not None else None,
         }
 
     lineage = {

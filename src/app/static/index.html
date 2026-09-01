@@ -206,8 +206,15 @@ async function load() {
 
     const mins = (b.word_count / 153).toFixed(1);
     const lineage = parse(b.lineage, {});
+    // Keep only values that are actually dates. A missing timestamp used to
+    // arrive as the string "None", which is truthy and sorts above every
+    // digit, so it won the reverse sort and the header read "data unknown"
+    // even though four other sources had real times. Fixed at the source too;
+    // this guards against any non-date sneaking in again.
     const freshest = (lineage.bronze || [])
-      .map(r => r.last_ingested).filter(Boolean).sort().reverse()[0];
+      .map(r => r.last_ingested)
+      .filter(v => v && v !== "None" && !isNaN(new Date(v).getTime()))
+      .sort().reverse()[0];
     const age = fmtAge(freshest);
 
     app.innerHTML = `
@@ -426,7 +433,8 @@ function renderData(lineage) {
   const gold = lineage.gold || {};
   const bronzeRows = bronze.reduce((n, r) => n + (r.rows || 0), 0);
   const silverUsed = silver.reduce((n, r) => n + (r.used || 0), 0);
-  const oldest = bronze.map(r => r.last_ingested).filter(Boolean).sort()[0];
+  const oldest = bronze.map(r => r.last_ingested)
+    .filter(v => v && v !== "None" && !isNaN(new Date(v).getTime())).sort()[0];
   const bk = kindCounts(bronze), sk = kindCounts(silver);
 
   $("#pane-data").innerHTML = `
