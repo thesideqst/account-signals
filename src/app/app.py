@@ -858,3 +858,12 @@ def episodes(account_id: str):
 def index():
     with open(os.path.join(os.path.dirname(__file__), "static", "index.html")) as f:
         return f.read()
+
+
+@app.get("/demo", response_class=HTMLResponse)
+def demo():
+    """The narrated walkthrough: architecture and design decisions, click-advanced,
+    with a handoff into the real app. Static and self-contained on purpose - it
+    has to keep working for a demo even if Postgres or a warehouse is down."""
+    with open(os.path.join(os.path.dirname(__file__), "static", "demo.html")) as f:
+        return f.read()
