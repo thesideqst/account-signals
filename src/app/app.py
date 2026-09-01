@@ -588,10 +588,20 @@ def add_topic(account_id: str, topic: str = Form(...), origin: str = Form("manua
 @app.get("/api/topics/{account_id}")
 def topics(account_id: str):
     with pg() as c:
+        # `generating` is not a terminal state, though nothing used to move it
+        # on: the app sets it when a rep triggers a run, and a run that failed
+        # or was cancelled stranded that topic outside the queue permanently.
+        # A run takes two to four minutes, so anything still generating after
+        # thirty is a run that died and the topic comes back. Mirrors the same
+        # rule in topic_queue_current, so the tab and the pipeline agree on
+        # what is outstanding.
         return c.execute("""
-            SELECT request_id, topic, origin, requested_at
+            SELECT request_id, topic, origin, requested_at, status
             FROM app.topic_requests
-            WHERE account_id = %s AND status = 'queued'
+            WHERE account_id = %s
+              AND (status = 'queued'
+                   OR (status = 'generating'
+                       AND used_at < now() - interval '30 minutes'))
             ORDER BY requested_at DESC LIMIT 20
         """, (account_id,)).fetchall()
 
