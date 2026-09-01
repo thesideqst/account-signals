@@ -142,7 +142,10 @@ changes subject out loud.
 
 1. COLD OPEN AND CALLBACK (about 1.5 minutes)
 Open with ONE short line naming the show and the account, and nothing else:
-"This is {show_name}. Today, <company>." Then stop introducing and start talking.
+"This is {show_name}. Today, <company>." That line ENDS THERE - it is a complete
+sentence and a full stop. Do not continue it into the next thought: "Today, Alphabet
+posted a quarter that was reported on July 23" reads as though they posted it today.
+Begin the following sentence fresh, then start talking.
 {callback_instruction}
 Then state today's focus immediately. No throat-clearing, no agenda, no introducing the
 company as if the listener has never heard of it. Start where the tension is.
@@ -269,6 +272,7 @@ COMPANY_NAMES = {"NVDA": "NVIDIA", "GOOG": "Alphabet", "MU": "Micron"}
 def build(mode: str, account: str, deltas: str, framing: str, context: str = "",
           macro: str = "", callback: str = "", derived_note: str = "",
           news: str = "", requested_topic: str = "",
+          topic_source: str = "rep",
           reported_on: str = "", reported_days_ago=None) -> str:
     """Assemble the prompt for one mode."""
     m = MODES[mode]
@@ -351,12 +355,25 @@ def build(mode: str, account: str, deltas: str, framing: str, context: str = "",
         core_minutes=m["core_minutes"],
         core_instruction=(
         m["core"] + (
-            f"\n\nTHE REP ASKED FOR THIS SUBJECT. Build the deep dive around it:\n\n"
-            f"    {requested_topic}\n\n"
-            f"They asked because they did not follow it the first time, so assume no "
-            f"prior understanding and build from the ground up. If the sources you have "
-            f"genuinely do not cover it, say so plainly in one sentence and teach the "
-            f"closest thing they do cover - never fill the gap from memory."
+            (
+                f"\n\nTHE REP ASKED FOR THIS SUBJECT. Build the deep dive around it:\n\n"
+                f"    {requested_topic}\n\n"
+                f"They asked because they did not follow it the first time, so assume no "
+                f"prior understanding and build from the ground up."
+                if topic_source == "rep" else
+                # Nobody asked. Saying they did would be a small lie told to
+                # the listener in the first ten seconds of the episode, in a
+                # briefing whose whole claim is that it does not invent things.
+                f"\n\nNO ONE ASKED FOR A SUBJECT TODAY, so this is a standing one worth "
+                f"understanding about this account. Build the deep dive around it:\n\n"
+                f"    {requested_topic}\n\n"
+                f"Do NOT say the rep asked for this, and do not imply they raised it. "
+                f"Open on why it matters for their next conversation. Assume no prior "
+                f"understanding and build from the ground up."
+            )
+            + f"\n\nIf the sources you have genuinely do not cover it, say so plainly "
+              f"in one sentence and teach the closest thing they do cover - never fill "
+              f"the gap from memory."
             if requested_topic and mode == "C" else ""
         )
     ),
