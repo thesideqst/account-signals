@@ -80,7 +80,21 @@ and it let a rep skate by on whatever they happened to remember.
 
 ## Running it
 
-Needs the Databricks CLI (v1.14+) and a workspace.
+Needs [git](https://git-scm.com/downloads), the [Databricks
+CLI](https://docs.databricks.com/aws/en/dev-tools/cli/install) (v1.14+), and a
+Databricks workspace you can log into.
+
+**1. Get the code onto your computer.** Open a terminal (macOS: Terminal app;
+Windows: Command Prompt or PowerShell) and run:
+
+```bash
+git clone https://github.com/thesideqst/account-signals.git
+cd account-signals
+```
+
+**2. Log in and set everything up.** Replace `<your-workspace-url>` with your
+Databricks workspace address (looks like `https://your-company.cloud.databricks.com`),
+then run each line below in order:
 
 ```bash
 databricks auth login --host <your-workspace-url> --profile DEFAULT
