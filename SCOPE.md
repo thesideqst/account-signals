@@ -169,6 +169,51 @@ Open questions:
 - Requests are free text. They need grounding against something - the primer table, or a
   retrieval over existing sources - or Mode C is back to inventing.
 
+### Full-article news, not headlines and teasers
+
+The single largest source of fabrication in this pipeline is that the news it
+retrieves is not articles. **410 of 430 news chunks are 300 characters or
+fewer** - a headline plus a truncated teaser - because Google News and Yahoo
+Finance RSS carry summaries, not bodies. The 2026-09-01 audit traced every
+ungrounded figure it found to one of these stubs: a 325-character teaser about
+an IPO investment became an invented 1999 date and an invented $200,000 figure,
+and a headline containing "15 gigawatts" became an invented global ceiling on
+AI power with a consequence chain built on top of it.
+
+**This is a data problem wearing a prompt problem's clothes.** The model is
+handed a headline and asked to narrate its significance, which is a request to
+speculate. No prompt rule fully survives that, because the instruction and the
+task are in direct conflict. The HEADLINE ONLY labelling and the grounding
+guard added on 2026-09-01 are mitigation - they stop the worst of it and catch
+what gets through - but the fix is to hand the model the article.
+
+What it would change:
+- **Ingestion** gains a fetch-and-extract step: follow the RSS link, pull the
+  page, extract the body. Readability-style extraction rather than raw HTML.
+- **Chunking already works** - `chunk_and_embed.py` splits on sentence
+  boundaries and would simply have real text to split.
+- **Retrieval gets more selective, not less.** With bodies, keyword matching
+  and Vector Search both start earning their keep; today they match against a
+  headline, where almost any query looks equally relevant.
+- **The KIND: ARTICLE / HEADLINE ONLY distinction stays.** Some sources will
+  always be headline-only, and the model needs to know which.
+
+Risks to weigh before doing it:
+- **Terms of service.** Scraping article bodies is a different act from reading
+  an RSS summary. Seeking Alpha was already ruled out on ToS grounds and that
+  reasoning has to extend here rather than be quietly forgotten - the decision
+  on 2026-08-30 was explicitly that taking their headlines while declining
+  their transcripts would be picking whichever reading suited us.
+- **Paywalls.** Many of the most useful outlets will return a stub or a consent
+  wall, so the extractor must detect that and fall back to HEADLINE ONLY rather
+  than treating boilerplate as body text.
+- **A licensed API is the clean answer** if one fits the budget - it removes
+  the ToS question and the extraction fragility together.
+
+Until then the guard is what stands between a teaser and a confident invented
+number, so it should not be removed when this lands - it should be the test
+that proves this worked.
+
 ### Cross-account trends
 
 With several accounts, surface the themes that cut across them rather than
