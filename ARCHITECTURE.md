@@ -358,9 +358,10 @@ window but rules out longer backfills.
 commercial use or redistribution. This is portfolio work shown to employers,
 which is a grey area worth reading rather than assuming.
 
-**`rating_changes.py` is written but not wired into the pipeline**, because
-`bronze_analyst_ratings` does not exist until the FMP ingest is implemented,
-and one unresolvable table fails the whole pipeline run.
+**`rating_changes.py` is wired in.** The `analyst_ratings` ingest task
+(`resources/ingest.job.yml`) writes `bronze_analyst_ratings`, and
+`rating_changes.py` is a library in `resources/signals.pipeline.yml`,
+producing `silver_rating_changes`.
 
 ## Known constraints
 
