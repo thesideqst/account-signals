@@ -194,6 +194,26 @@ def main() -> None:
     deltas = ([by_metric["revenue"]] if "revenue" in by_metric else []) + ranked
     print("metrics selected: " + ", ".join(r["metric"] for r in deltas))
 
+    # WHEN this quarter was actually reported. Every episode opened "X just
+    # posted a quarter", which was true for NVIDIA at six days old and plainly
+    # false for Alphabet at forty and Micron at sixty-eight. The filing date is
+    # on the facts, so the claim can be checked rather than assumed.
+    reported_on, reported_days_ago = "", None
+    try:
+        r = spark.sql(f"""
+            SELECT max(filed) AS filed,
+                   datediff(current_date(), max(filed)) AS days_ago
+            FROM {catalog}.{schema}.silver_quarterly_metrics
+            WHERE symbol = '{account}' AND period_end = '{period}'
+        """).collect()
+        if r and r[0]["filed"]:
+            reported_on = str(r[0]["filed"])
+            reported_days_ago = int(r[0]["days_ago"])
+            print(f"quarter reported {reported_on} "
+                  f"({reported_days_ago} day(s) ago)")
+    except Exception as e:
+        print(f"  filing date unavailable: {type(e).__name__}")
+
     # Mode is needed before retrieval, because what gets retrieved depends on it.
     _sig = spark.sql(f"""
         SELECT mode FROM {catalog}.{schema}.silver_daily_signals
@@ -553,6 +573,8 @@ def main() -> None:
     prompt = prompts.build(
         mode=mode,
         requested_topic=requested_topic,
+        reported_on=reported_on,
+        reported_days_ago=reported_days_ago,
         news="\n".join(news_lines),
         account=account,
         deltas="\n".join(delta_lines),

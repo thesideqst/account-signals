@@ -15,6 +15,10 @@ VOICE_RULES is shared by every mode. Each rule below was added after a specific
 failure - see the 2026-08-30 entries in SCOPE.md.
 """
 
+# The show's name, spoken once in the opening line. One constant because it is
+# said aloud in every episode - change it here and nowhere else.
+SHOW_NAME = "Account Signals"
+
 VOICE_RULES = """AUDIO-FIRST FORMATTING AND VOICE
 
 THIS IS PROSE, START TO FINISH.
@@ -137,9 +141,13 @@ page. Anything you type is spoken aloud, so a bracketed label becomes the narrat
 changes subject out loud.
 
 1. COLD OPEN AND CALLBACK (about 1.5 minutes)
+Open with ONE short line naming the show and the account, and nothing else:
+"This is {show_name}. Today, <company>." Then stop introducing and start talking.
 {callback_instruction}
 Then state today's focus immediately. No throat-clearing, no agenda, no introducing the
 company as if the listener has never heard of it. Start where the tension is.
+
+{reported_instruction}
 
 2. CORE ANALYSIS (about {core_minutes} minutes)
 {core_instruction}
@@ -260,7 +268,8 @@ COMPANY_NAMES = {"NVDA": "NVIDIA", "GOOG": "Alphabet", "MU": "Micron"}
 
 def build(mode: str, account: str, deltas: str, framing: str, context: str = "",
           macro: str = "", callback: str = "", derived_note: str = "",
-          news: str = "", requested_topic: str = "") -> str:
+          news: str = "", requested_topic: str = "",
+          reported_on: str = "", reported_days_ago=None) -> str:
     """Assemble the prompt for one mode."""
     m = MODES[mode]
     company = COMPANY_NAMES.get(account, account)
@@ -314,7 +323,30 @@ def build(mode: str, account: str, deltas: str, framing: str, context: str = "",
             "played a different episode."
         )
 
+    # WHEN the quarter was reported, and whether that is recent enough to
+    # speak about as news. Every episode opened "X just posted a quarter",
+    # which was true for NVIDIA at six days old and false for Alphabet at
+    # forty and Micron at sixty-eight. A filing does not become news because
+    # the briefing happens to be reading it today.
+    RECENT_DAYS = 7
+    if not reported_on:
+        reported_instruction = ""
+    elif reported_days_ago is not None and reported_days_ago <= RECENT_DAYS:
+        reported_instruction = (
+            f"THIS QUARTER WAS REPORTED ON {reported_on}, {reported_days_ago} "
+            f"day(s) ago. That is genuinely recent, so you may treat it as news, "
+            f"and say when it landed.")
+    else:
+        reported_instruction = (
+            f"THIS QUARTER WAS REPORTED ON {reported_on}, {reported_days_ago} "
+            f"day(s) ago. IT IS NOT NEWS. Do not say \"just posted\", \"just "
+            f"reported\", \"this week\", \"today\", or anything else implying it "
+            f"landed recently. Say plainly when it was reported, then go straight "
+            f"to why it still matters now.")
+
     phases = PHASES.format(
+        show_name=SHOW_NAME,
+        reported_instruction=reported_instruction,
         callback_instruction=callback_instruction,
         core_minutes=m["core_minutes"],
         core_instruction=(
