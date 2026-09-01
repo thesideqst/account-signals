@@ -162,15 +162,22 @@ def main() -> None:
     # nothing to deep-dive on and the model chooses from its own knowledge,
     # which is the one thing the grounding rule exists to prevent.
     requested_topic = force_topic
+    topic_request_id = None
     if mode == "C" and not requested_topic:
         try:
             q = spark.sql(f"""
-                SELECT topic FROM {catalog}.{schema}.topic_queue_current
+                SELECT request_id, topic
+                FROM {catalog}.{schema}.topic_queue_current
                 WHERE account_id = '{account}'
                 ORDER BY requested_at ASC LIMIT 1
             """).collect()
             if q:
                 requested_topic = q[0]["topic"]
+                # Kept so the topic can be marked used once the episode
+                # actually publishes. Without it the queue never advanced:
+                # this query returned request_id 1 on every scheduled run,
+                # forever, however many episodes had already covered it.
+                topic_request_id = q[0]["request_id"]
                 print(f"mode C subject from the queue: {requested_topic[:80]}")
             else:
                 print("mode C with an empty queue - no requested subject")
@@ -771,6 +778,25 @@ def main() -> None:
         ) WHERE _r = 1
     """)
     print(f"appended {briefing_id} to {catalog}.{schema}.gold_briefing")
+
+    # Mark the queued topic used - after the episode is published, not before,
+    # so a run that dies mid-way leaves the topic outstanding rather than
+    # silently consumed. Only for a topic taken from the QUEUE: a forced topic
+    # came from the app, which marks its own.
+    if topic_request_id is not None:
+        spark.sql(f"""
+            CREATE TABLE IF NOT EXISTS {catalog}.{schema}.gold_topic_usage (
+                request_id BIGINT, account_id STRING, topic STRING,
+                briefing_id STRING, used_at TIMESTAMP
+            )
+        """)
+        safe_topic = requested_topic.replace("'", "''")
+        spark.sql(f"""
+            INSERT INTO {catalog}.{schema}.gold_topic_usage
+            SELECT {topic_request_id}, '{account}', '{safe_topic}',
+                   '{briefing_id}', current_timestamp()
+        """)
+        print(f"topic request {topic_request_id} marked used")
 
 
 if __name__ == "__main__":
