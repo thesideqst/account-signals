@@ -352,9 +352,18 @@ async def submit_recap(account_id: str, audio: UploadFile = File(...),
                        rep_id: str = Form("web-user")):
     """Take a spoken recap, transcribe it, write it to Lakebase.
 
+    NOT REACHABLE FROM THE UI. Nothing in index.html has ever called this; the
+    recorder there posts to /api/answer, the per-question flow. The endpoint
+    works - four real spoken recaps were graded through it by hand - and is
+    kept because it measures something the questions cannot: UNAIDED recall,
+    with nobody handing you the prompts, which is the situation before an
+    actual customer meeting. Wire a button to it and the rest of the chain
+    already runs.
+
     This INSERT is what starts the write-back: the recap returns to Unity
     Catalog through Lakehouse Federation, gets graded against the briefing it
-    was recalling, and the gaps become the callback in the next episode.
+    was recalling, and the gaps become the callback in the next episode -
+    alongside the gaps from the questions, whichever is newer.
     """
     import base64
     import json as _json

@@ -42,6 +42,32 @@ def extract_text(content) -> str:
     return "\n".join(parts)
 
 
+def first_point(text: str, limit: int = 240) -> str:
+    """Reduce a recorded gap to the one point the cold open can carry.
+
+    The two sources write `missed` in different shapes. Comprehension grading
+    got more verbose as the prompt grew: early answers stored a single short
+    sentence (about 110 characters), later ones store the gap, a blank line,
+    and then a paragraph explaining it - up to 760 characters. Handed the whole
+    thing, the cold open recites an essay before it reaches the news, which is
+    the same failure that made the recap path pass ONE ranked gap rather than
+    the whole JSON list.
+
+    So: take the text before the first blank line, flatten any remaining line
+    breaks, and cut at a sentence boundary if it is still long. Verified
+    against every recorded gap - both shapes survive it intact.
+    """
+    if not text:
+        return ""
+    head = text.strip().split("\n\n", 1)[0]
+    head = " ".join(head.split())
+    if len(head) <= limit:
+        return head
+    # Prefer the last sentence end inside the limit over a mid-word chop.
+    cut = max(head.rfind(". ", 0, limit), head.rfind("; ", 0, limit))
+    return head[:cut + 1].strip() if cut > 60 else head[:limit].rstrip() + "..."
+
+
 def main() -> None:
     import prompts
     from databricks.sdk import WorkspaceClient
@@ -274,13 +300,47 @@ def main() -> None:
         mode_reason = f"requested: {force_topic[:120]}"
     print(f"mode {mode} - {mode_reason}")
 
-    # A graded recap from the recall loop becomes the cold-open callback.
-    # The table does not exist until the loop runs, so absence is normal.
-    callback = ""
+    # The most recent thing this rep got wrong becomes the cold-open callback.
+    #
+    # TWO sources feed it, because the rep can be measured two ways and only
+    # one of them is currently reachable in the app. Comprehension questions
+    # (bronze_recap_answers) are what people actually answer; a free-form
+    # spoken recap (gold_recall_grades) measures UNAIDED recall, which is the
+    # harder and more realistic test, but has no UI yet. Reading only the recap
+    # table meant every gap a real person produced was ignored - the loop
+    # closed on the path nobody used.
+    #
+    # The rule is plain recency: whichever gap is newer wins. No source
+    # precedence to reason about, and it keeps working unchanged if the recap
+    # ever gets a UI. Neither table exists until its loop runs, so absence of
+    # either is normal and must not fail the briefing.
+    candidates = []
+
+    try:
+        # Comprehension questions. `missed` is only written when something was
+        # actually missed, so a non-empty value IS the gap - no parsing needed.
+        # Ties on the timestamp are broken by answer_id so a re-run of the same
+        # briefing picks the same gap rather than an arbitrary one.
+        a = spark.sql(f"""
+            SELECT missed, answered_at
+            FROM {catalog}.{schema}.bronze_recap_answers
+            WHERE account_id = '{account}'
+              AND missed IS NOT NULL AND trim(missed) <> ''
+            ORDER BY answered_at DESC, answer_id DESC
+            LIMIT 1
+        """).collect()
+        if a:
+            point = first_point(a[0]["missed"])
+            if point:
+                candidates.append((a[0]["answered_at"], point))
+    except Exception:
+        pass
+
     try:
         g = spark.sql(f"""
-            SELECT gaps FROM {catalog}.{schema}.gold_recall_grades
-            WHERE account_id = '{account}' ORDER BY graded_at DESC LIMIT 1
+            SELECT gaps, graded_at FROM {catalog}.{schema}.gold_recall_grades
+            WHERE account_id = '{account}'
+            ORDER BY graded_at DESC, recap_id DESC LIMIT 1
         """).collect()
         if g:
             # Pass the single most important gap, phrased as a sentence. Handing
@@ -290,9 +350,16 @@ def main() -> None:
             rank = {"high": 0, "medium": 1, "low": 2}
             parsed.sort(key=lambda x: rank.get(str(x.get("importance")).lower(), 3))
             if parsed:
-                callback = str(parsed[0].get("point", "")).strip()
+                point = first_point(parsed[0].get("point", ""))
+                if point:
+                    candidates.append((g[0]["graded_at"], point))
     except Exception:
         pass
+
+    # max() on the timestamp, and only non-empty text ever made it into the list.
+    callback = max(candidates)[1] if candidates else ""
+    if callback:
+        print(f"callback: {callback[:90]}")
 
     # Phase 3 material. Macro first: rates and capex, with direction in words
     # for the same reason the metric context states its own direction.
