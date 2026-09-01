@@ -16,12 +16,12 @@ A daily ~10-minute audio briefing per account that synthesizes real financial de
 
 ## Success criteria
 
-- [~] Pipeline produces a ~10-minute audio briefing for at least 2 accounts, end to end — 2026-08-30: SCRIPT works for 1 account (1,510 words, ~10 min). Audio and second account still to do
+- [x] Pipeline produces a ~10-minute audio briefing for at least 2 accounts, end to end — 2026-08-31: three accounts (NVDA, GOOG, MU) each publish an episode with audio, playable in the app. Episodes currently run 4-6 minutes rather than 10
 - [x] Financial analysis is grounded in structured XBRL deltas, not LLM-paraphrased filing text — 2026-08-30: deltas computed in SQL, passed to the model as fixed numbers to narrate
 - [x] Briefing synthesizes at least 5 source types — 2026-08-30: all six connected (XBRL filings, transcripts, news, analyst ratings, industry trends, macro)
-- [ ] Recall-and-grade loop works: rep speaks a recap, this is transcribed, written to Lakebase, and graded against the actual account brief
-- [ ] The recap write demonstrably returns from Lakebase to Unity Catalog and is graded there (phase 1: scheduled read job; phase 2 target: native Lakebase CDF)
-- [ ] Next briefing for a graded account includes a short callback and emphasis on the most recent missed point (e.g., "you consistently miss margin detail on this account")
+- [x] Recall-and-grade loop works: rep speaks a recap, this is transcribed, written to Lakebase, and graded against the actual account brief — 2026-09-01: works through the comprehension questions, which is the path with a UI: the rep answers aloud, Whisper transcribes, the answer is scored and written to `app.recap_answers` with the point they missed. The FREE-FORM recap endpoint (`/api/recap`) also works end to end — 4 real spoken recaps, 4 grades in `gold_recall_grades` — but has never had a UI, so it is only reachable by hand
+- [x] The recap write demonstrably returns from Lakebase to Unity Catalog and is graded there (phase 1: scheduled read job; phase 2 target: native Lakebase CDF) — 2026-09-01: 9 answers in Postgres, 9 in Unity Catalog, lag 0, visible live at `/api/roundtrip/NVDA`
+- [x] Next briefing for a graded account includes a short callback and emphasis on the most recent missed point — 2026-09-01: verified in `NVDA-2026-07-26-20260901T034220`, which opens on the memory-price / TSMC / financing gap recorded from the previous session's questions
 
 ## Out of scope
 
