@@ -123,14 +123,45 @@ def main() -> None:
         FROM {answers_target}
     """)
 
+    # Usage is recorded in Unity Catalog, not in Postgres. Federation reads
+    # Postgres but cannot write to it, and psycopg inside a serverless task
+    # kills the Python kernel (see the module docstring), so the briefing job
+    # has no way to mark a topic used at the source. It writes here instead,
+    # which is the direction that works, and the view below subtracts it.
+    spark.sql(f"""
+        CREATE TABLE IF NOT EXISTS {catalog}.{schema}.gold_topic_usage (
+            request_id BIGINT,
+            account_id STRING,
+            topic STRING,
+            briefing_id STRING,
+            used_at TIMESTAMP
+        )
+    """)
+
     # The topic queue comes back the same way. On a quiet day it is what the
     # episode is about, so Mode C stops having to invent a subject.
+    #
+    # "Outstanding" is more than status = 'queued', for two reasons:
+    #
+    # 1. Nothing marked a topic used, so the scheduled path read
+    #    ORDER BY requested_at ASC LIMIT 1 and got request_id 1 every single
+    #    time - forever, no matter how many episodes covered it. Subtracting
+    #    gold_topic_usage is what makes the queue advance.
+    # 2. `generating` was a TERMINAL state. The app sets it when a rep triggers
+    #    a run, and nothing ever moves it on, so a failed or cancelled run
+    #    stranded that topic outside the queue permanently. A run takes two to
+    #    four minutes, so anything still `generating` after thirty is a run
+    #    that died, and the topic returns to the queue rather than vanishing.
     spark.sql(f"""
         CREATE OR REPLACE VIEW {catalog}.{schema}.topic_queue_current AS
-        SELECT request_id, account_id, rep_id, topic, origin, status,
-               requested_at, used_at
-        FROM {LAKEBASE_CATALOG}.app.topic_requests
-        WHERE status = 'queued'
+        SELECT t.request_id, t.account_id, t.rep_id, t.topic, t.origin,
+               t.status, t.requested_at, t.used_at
+        FROM {LAKEBASE_CATALOG}.app.topic_requests t
+        LEFT ANTI JOIN {catalog}.{schema}.gold_topic_usage u
+          ON u.request_id = t.request_id
+        WHERE t.status = 'queued'
+           OR (t.status = 'generating'
+               AND t.used_at < current_timestamp() - INTERVAL 30 MINUTES)
     """)
     n = spark.sql(
         f"SELECT count(*) AS n FROM {catalog}.{schema}.topic_queue_current"

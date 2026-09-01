@@ -195,13 +195,36 @@ def main() -> None:
     print("metrics selected: " + ", ".join(r["metric"] for r in deltas))
 
     # Mode is needed before retrieval, because what gets retrieved depends on it.
+    #
+    # Taken from the STRONGEST signal in a short recent window, not from the
+    # latest signal_date. Those differ in exactly the case that matters most.
+    # A company reports four times a year and files after the close, so the
+    # earnings row lands on, say, 2026-08-26 - and news arrives every single
+    # day, creating a newer row on the 27th. The briefing runs 05:45 the next
+    # morning, so `max(signal_date)` found the news row and chose Mode B,
+    # skipping the quarter. Measured: NVDA's 2026-08-26 row is correctly
+    # classified A (1 filing, 1 call, 32 news) and no Mode A episode has ever
+    # been produced.
+    #
+    # A beats B beats C, and the window is the horizon over which an earnings
+    # day is still the most important thing that happened - two days, so a
+    # Friday-evening filing is still the subject on Monday morning.
+    MODE_WINDOW_DAYS = 2
     _sig = spark.sql(f"""
-        SELECT mode FROM {catalog}.{schema}.silver_daily_signals
-        WHERE symbol = '{account}' AND signal_date = (
-            SELECT max(signal_date) FROM {catalog}.{schema}.silver_daily_signals
-            WHERE symbol = '{account}')
+        SELECT mode, signal_date FROM {catalog}.{schema}.silver_daily_signals
+        WHERE symbol = '{account}'
+          AND signal_date >= date_sub(current_date(), {MODE_WINDOW_DAYS})
+        -- A first, then the most recent day within the window. Ranked
+        -- explicitly rather than relying on 'A' < 'B' < 'C' sorting, which
+        -- is true today and silently wrong the moment a mode is renamed.
+        ORDER BY CASE mode WHEN 'A' THEN 0 WHEN 'B' THEN 1 ELSE 2 END,
+                 signal_date DESC
+        LIMIT 1
     """).collect()
     mode = _sig[0]["mode"] if _sig else "C"
+    if _sig:
+        print(f"mode {mode} from signal_date {_sig[0]['signal_date']} "
+              f"(strongest signal in the last {MODE_WINDOW_DAYS} day(s))")
     if force_mode:
         mode = force_mode
         print(f"mode forced to {mode} by request")
@@ -210,15 +233,22 @@ def main() -> None:
     # nothing to deep-dive on and the model chooses from its own knowledge,
     # which is the one thing the grounding rule exists to prevent.
     requested_topic = force_topic
+    topic_request_id = None
     if mode == "C" and not requested_topic:
         try:
             q = spark.sql(f"""
-                SELECT topic FROM {catalog}.{schema}.topic_queue_current
+                SELECT request_id, topic
+                FROM {catalog}.{schema}.topic_queue_current
                 WHERE account_id = '{account}'
                 ORDER BY requested_at ASC LIMIT 1
             """).collect()
             if q:
                 requested_topic = q[0]["topic"]
+                # Kept so the topic can be marked used once the episode
+                # actually publishes. Without it the queue never advanced:
+                # this query returned request_id 1 on every scheduled run,
+                # forever, however many episodes had already covered it.
+                topic_request_id = q[0]["request_id"]
                 print(f"mode C subject from the queue: {requested_topic[:80]}")
             else:
                 print("mode C with an empty queue - no requested subject")
@@ -827,6 +857,25 @@ def main() -> None:
         ) WHERE _r = 1
     """)
     print(f"appended {briefing_id} to {catalog}.{schema}.gold_briefing")
+
+    # Mark the queued topic used - after the episode is published, not before,
+    # so a run that dies mid-way leaves the topic outstanding rather than
+    # silently consumed. Only for a topic taken from the QUEUE: a forced topic
+    # came from the app, which marks its own.
+    if topic_request_id is not None:
+        spark.sql(f"""
+            CREATE TABLE IF NOT EXISTS {catalog}.{schema}.gold_topic_usage (
+                request_id BIGINT, account_id STRING, topic STRING,
+                briefing_id STRING, used_at TIMESTAMP
+            )
+        """)
+        safe_topic = requested_topic.replace("'", "''")
+        spark.sql(f"""
+            INSERT INTO {catalog}.{schema}.gold_topic_usage
+            SELECT {topic_request_id}, '{account}', '{safe_topic}',
+                   '{briefing_id}', current_timestamp()
+        """)
+        print(f"topic request {topic_request_id} marked used")
 
 
 if __name__ == "__main__":
