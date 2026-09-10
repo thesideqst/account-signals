@@ -74,6 +74,7 @@ A minimal audio-first app that serves the daily briefing per account (queried fr
 - ~~Does a16z's State of AI report land in their RSS feed?~~ — closed 2026-08-30: a16z has no RSS feed at any standard path (six tried, all 404)
 - **Future bolt-on:** `/stable/grade-latest-news` carries article text about grade changes and could add a qualitative layer to the ratings source, feeding the Vector Search path. Deliberately deferred — not in v1. Evaluate on its own terms when the quantitative signal is working; it is news *about* rating changes rather than the analyst's own reasoning, so it may not fill the gap it appears to
 - ~~Does `GRADE_SCALE` cover the firms that actually rate these accounts?~~ — closed 2026-08-30: 99.8% coverage on 1,138 real NVDA grade actions. The only gap was the bare string "Perform", now mapped to neutral. The `grade_vocabulary_known` expectation is what surfaced it
+- **Rep-requested topics: does a pending request stay live forever?** The queue (`app.topic_requests` -> `topic_queue_current` -> Mode C) has no expiry. A request from a month ago is exactly as eligible as one from yesterday, first-in-first-out. Not urgent at 3 accounts and a thin queue, but worth a decision before the queue actually fills up
 - **Cross-account trends, retrieved-source overlap half:** deliberately not built (2026-09-09, see Decisions) — all three live accounts share the `_industry` sentinel, so a naive detector on retrieved-chunk overlap would fire on plain sector membership constantly. Telling a real cross-cutting theme from that is the open problem the backlog originally flagged; still unsolved. Does a portfolio episode ever get built, and if so does it get its own comprehension questions? Also still open — out of scope for the metric-correlation version that shipped
 
 ## Decisions
@@ -150,33 +151,6 @@ Risks to watch:
 
 Do this after single-voice TTS works end to end. The monologue is the thing that
 proves the pipeline; the conversation is a format change on top of it.
-
-### Rep-requested topics
-
-A second feedback loop alongside recall-and-grade. After listening, the rep says what they
-want the next episode to dig into - "explain how their packaging supply chain actually
-works", "go deeper on the memory pricing thing". That request drives a future briefing.
-
-Why this matters more than it first looks: **Mode C currently has no way to choose its
-subject.** It fires on quiet days and says "teach something structural about this account",
-but nothing decides what, so the model would pick from its own knowledge - the exact
-grounding hole the rest of the project is built to avoid. A requested topic closes it.
-Mode C deep-dives what was asked for.
-
-Architecturally it is nearly free. Same write-back path as the recall recaps: the app
-writes to Lakebase, it returns to Unity Catalog, the next briefing reads it. Same table
-shape, same mechanism, one more column on `silver_daily_signals` and one more branch in
-mode selection.
-
-It also makes the loop genuinely two-way. One signal is *did you understand it*; the other
-is *what do you want next*. Grading alone only measures the rep. This lets them steer.
-
-Open questions:
-- Does a pending topic request outrank a real signal? If a filing lands the same day, does
-  the request wait, or does the episode cover both?
-- How long does a request stay live before it goes stale?
-- Requests are free text. They need grounding against something - the primer table, or a
-  retrieval over existing sources - or Mode C is back to inventing.
 
 ### Full-article news, not headlines and teasers
 
@@ -409,3 +383,4 @@ tooling, and phase 2 is fully scriptable.
 - 2026-09-09 — The backlog's open risk — whether grading targets the whole conversation or only the substantive claims in it — is resolved for phase 1 by not narrowing it: `EPISODE_META_PROMPT` and `QUESTIONS_PROMPT` keep taking the full concatenated dialogue, including HOST_B's pushback, exactly as they took the full monologue before. Smallest change that ships phase 1 without inventing a filtering rule; revisit if comprehension questions start targeting a host's scepticism rather than a fact about the account
 - 2026-09-09 — `parse_turns` and `concat_turns` (`src/briefing/synthesize.py`) extracted as pure functions rather than left inline in `main()`, the way `grade.py`'s JSON parsing was — matching `figures()` and `first_point()`, which exist as functions precisely so they are testable with no Spark or Databricks SDK dependency. `tests/test_turns.py` uses the same `ast`-extraction technique as `test_grounding.py` and `test_macro_units.py`
 - 2026-09-09 — Cross-account trends built as metric correlation only, not retrieved-source overlap — the Backlog's two candidate signals, and only one shipped. `gold_cross_account_themes` (`src/pipelines/cross_account_themes.py`, a new DLT table added to `signals.pipeline.yml`, run once daily across every account inside the existing 05:00 ET ingest job — no new job resource) reads `silver_metric_context`, takes each account's OWN most recent reported quarter (accounts file on different fiscal calendars, so a shared calendar day is the wrong grain — see the file's docstring), and flags where 2+ accounts move the same direction on the same metric AND the same basis (QoQ never compared to YoY, per VOICE_RULES). It reuses the exact EXPANDED/COMPRESSED/ACCELERATING/SLOWING words `synthesize.py` already speaks for these numbers rather than inventing a second vocabulary, so a flagged theme can never contradict what the model says about its own figure. `synthesize.py` reads it (try/except, absence normal, same pattern as macro and the recall callback) for the exact (account, period) pair already used for `context_lines`, and passes at most one theme into the prompt as one more optional fact block, skipped on Mode C. The prompt instructs at most one sentence, only where the model is already discussing that metric, and forbids stating or estimating the other account's own numbers — it was given only that the direction matches, nothing else. The backlog's other signal — retrieved-source overlap via `gold_briefing.lineage` — was deliberately NOT built: all three live accounts are semiconductor/tech-adjacent, and industry_trend chunks carry the sentinel `account_id = '_industry'` shared across every account by construction (`chunk_and_embed.py`), so a naive overlap detector would fire on that sentinel constantly — "all semiconductor companies face memory pricing" is a tautology, not an insight — and the backlog itself flags telling a real cross-cutting theme from plain sector membership as an unsolved problem, not one to solve algorithmically here. Metric correlation is a specific, checkable numeric fact rather than "the same generic chunk got retrieved," so it is the one implemented, per the task's instruction to weight it as primary. No portfolio episode was built — the backlog explicitly said a one-sentence in-episode echo justifies this alone — and whether a portfolio episode should exist, with its own comprehension questions, is left open in Open questions above rather than decided here
+- 2026-09-09 — "Rep-requested topics" removed from Backlog: it was already built. `app.topic_requests` (Postgres, via `/api/topic/{account_id}`) syncs to `topic_queue_current` (`src/sync/read_recaps.py`), Mode C reads it before falling back to a standing-subject rotation, and a used request is marked after publish. Two of the three open questions the backlog entry raised are already answered by existing code: mode ordering (A beats B beats C) means a queued topic never preempts a real signal, and `pick_fallback_subject`'s chunk-count check is the grounding check for free-text requests. The third — no staleness policy on a queued request — is real and moved to Open questions above
