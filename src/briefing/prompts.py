@@ -329,7 +329,7 @@ COMPANY_NAMES = {"NVDA": "NVIDIA", "GOOG": "Alphabet", "MU": "Micron"}
 def build(mode: str, account: str, deltas: str, framing: str, context: str = "",
           macro: str = "", callback: str = "", derived_note: str = "",
           news: str = "", requested_topic: str = "",
-          topic_source: str = "rep",
+          topic_source: str = "rep", cross_theme: str = "",
           reported_on: str = "", reported_days_ago=None) -> str:
     """Assemble the prompt for one mode."""
     m = MODES[mode]
@@ -405,13 +405,8 @@ def build(mode: str, account: str, deltas: str, framing: str, context: str = "",
             f"landed recently. Say plainly when it was reported, then go straight "
             f"to why it still matters now.")
 
-    phases = PHASES.format(
-        show_name=SHOW_NAME,
-        reported_instruction=reported_instruction,
-        callback_instruction=callback_instruction,
-        core_minutes=m["core_minutes"],
-        core_instruction=(
-        m["core"] + (
+    core_instruction = m["core"] + (
+        (
             (
                 f"\n\nTHE REP ASKED FOR THIS SUBJECT. Build the deep dive around it:\n\n"
                 f"    {requested_topic}\n\n"
@@ -433,7 +428,32 @@ def build(mode: str, account: str, deltas: str, framing: str, context: str = "",
               f"the gap from memory."
             if requested_topic and mode == "C" else ""
         )
-    ),
+    )
+
+    # A CROSS-ACCOUNT ECHO, computed by gold_cross_account_themes: this
+    # account's own number, on some metric it may or may not end up
+    # narrating, is moving the same direction at another live account right
+    # now. Never fired on Mode C (synthesize.py does not query it there),
+    # so this only ever lands inside an earnings or news core.
+    if cross_theme:
+        core_instruction += (
+            "\n\nA CROSS-ACCOUNT ECHO. At most ONE sentence, and only if it fits "
+            "naturally where you are already discussing the matching metric - if "
+            "this episode does not end up talking about that particular metric, "
+            "leave the echo out entirely rather than introducing it as a new "
+            "topic. Say only that the same direction is also showing up at the "
+            "other account right now. Do not explain, size, or guess the other "
+            "account's own numbers - you were not given them, only that the "
+            "direction matches:\n\n"
+            f"    {cross_theme}\n"
+        )
+
+    phases = PHASES.format(
+        show_name=SHOW_NAME,
+        reported_instruction=reported_instruction,
+        callback_instruction=callback_instruction,
+        core_minutes=m["core_minutes"],
+        core_instruction=core_instruction,
         macro_instruction=macro_instruction,
     )
 
@@ -465,6 +485,12 @@ def build(mode: str, account: str, deltas: str, framing: str, context: str = "",
          "as given. Never infer a direction from a number's sign, and never reverse one. "
          "Use these to explain WHY a metric moved rather than just reporting that it "
          "did.\n\n" + context) if context else "",
+        ("A CROSS-ACCOUNT ECHO\nComputed by gold_cross_account_themes from this "
+         "account's own metric-context table, matched against the other live "
+         "accounts' own most recent quarters. This is a real, checkable fact about "
+         "THIS account, not analysis of the other one - see the instruction in the "
+         "narrative architecture below for exactly how to use it.\n\n"
+         + cross_theme) if cross_theme else "",
         derived_note,
         "WHAT MANAGEMENT SAID\nThe earnings call. prepared_remarks was written in advance "
         "by investor relations. qa is unscripted, where analysts push back.\n\n" + framing

@@ -23,6 +23,11 @@ resources:
             path: ../src/pipelines/transcript_turns.py
         - file:
             path: ../src/pipelines/metric_context.py
+        # Reads silver_metric_context, so DLT orders it after that table via
+        # dlt.read() - no explicit ordering needed here (see
+        # src/pipelines/CLAUDE.md, "How a table gets defined and found").
+        - file:
+            path: ../src/pipelines/cross_account_themes.py
         - file:
             path: ../src/pipelines/macro_context.py
         - file:

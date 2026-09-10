@@ -171,6 +171,19 @@ MACRO_UNITS = {
 }
 
 
+# Spoken label for each gold_cross_account_themes metric key. Keys match
+# DIRECTED_METRICS in src/pipelines/cross_account_themes.py exactly; a label
+# missing here just falls back to the raw key rather than failing the run.
+CROSS_THEME_LABELS = {
+    "gross_margin_qoq": "gross margin move versus last quarter",
+    "gross_margin_yoy": "gross margin move versus a year ago",
+    "operating_margin_qoq": "operating margin move versus last quarter",
+    "cost_vs_revenue_gap": "costs-versus-revenue growth gap",
+    "revenue_growth": "revenue growth trend",
+    "net_vs_operating_gap": "net-income-versus-operating-income growth gap",
+}
+
+
 def macro_value(series_id: str, value) -> str:
     """A FRED observation with its unit attached."""
     if value is None:
@@ -546,6 +559,50 @@ def main() -> None:
              "year-over-year, which points to something below the operating line - tax, "
              "interest or a one-off - taking a bite.")
 
+    # Cross-account theme: is the SAME direction, on the SAME metric and
+    # basis, also true right now at another live account? Computed once daily
+    # across every account by gold_cross_account_themes (see
+    # src/pipelines/cross_account_themes.py for why this is metric
+    # correlation only, not retrieved-source overlap, and the tautology risk
+    # that ruled the second signal out for this first pass).
+    #
+    # Same guard as context_lines: skip on Mode C, which trims financials to
+    # revenue only and is not about the quarter at all. Queried on the exact
+    # (account, period) pair this episode already uses for context_lines, so
+    # a flagged theme can never be about a different quarter than the one
+    # this script is narrating.
+    #
+    # try/except, absence normal, never fails the run - table may not exist
+    # yet on a fresh deploy, or (the common case) no theme matched today.
+    cross_theme_line = ""
+    if mode != "C":
+        try:
+            rows = spark.sql(f"""
+                SELECT metric, direction, magnitude, other_accounts
+                FROM {catalog}.{schema}.gold_cross_account_themes
+                WHERE account_id = '{account}' AND period_end = '{period}'
+                ORDER BY size(other_accounts) DESC
+                LIMIT 1
+            """).collect()
+            if rows:
+                r = rows[0].asDict()
+                label = CROSS_THEME_LABELS.get(r["metric"], r["metric"])
+                other_names = ", ".join(
+                    prompts.COMPANY_NAMES.get(o["account_id"], o["account_id"])
+                    for o in r["other_accounts"]
+                )
+                cross_theme_line = (
+                    f"- This account's {label} is {r['direction']} in its most "
+                    f"recent quarter. The same direction, on the same metric and "
+                    f"basis, is also currently true at {other_names}. This is "
+                    f"about THIS account's own number only - you were not given "
+                    f"the other account's figures, so do not state or estimate "
+                    f"them.")
+                print(f"cross-account theme: {r['metric']} {r['direction']} "
+                      f"shared with {other_names}")
+        except Exception as e:
+            print(f"  cross-account theme unavailable: {type(e).__name__}")
+
     # Management only. Analyst questions set up the answers but are not framing.
     chunks = spark.sql(f"""
         SELECT speaker, role, section, chunk_text
@@ -831,6 +888,7 @@ def main() -> None:
         framing=framing,
         callback=callback,
         derived_note=derived_note,
+        cross_theme=cross_theme_line,
     )
     print(f"prompt: {len(prompt):,} chars | {len(deltas)} metrics | {len(chunks)} chunks")
 
@@ -1020,6 +1078,10 @@ def main() -> None:
             {"table": "silver_metric_context", "used": len(context_lines),
              "note": "relationships computed in SQL",
              "items": [c.lstrip("- ") for c in context_lines]},
+            {"table": "gold_cross_account_themes",
+             "used": 1 if cross_theme_line else 0,
+             "note": "metric correlation shared with another live account",
+             "items": [cross_theme_line.lstrip("- ")] if cross_theme_line else []},
             {"table": "silver_doc_chunks (transcript)", "used": len(chunks),
              "note": "management framing",
              "items": [f"{c['speaker']} ({c['section']}): "

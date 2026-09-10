@@ -74,6 +74,7 @@ A minimal audio-first app that serves the daily briefing per account (queried fr
 - ~~Does a16z's State of AI report land in their RSS feed?~~ — closed 2026-08-30: a16z has no RSS feed at any standard path (six tried, all 404)
 - **Future bolt-on:** `/stable/grade-latest-news` carries article text about grade changes and could add a qualitative layer to the ratings source, feeding the Vector Search path. Deliberately deferred — not in v1. Evaluate on its own terms when the quantitative signal is working; it is news *about* rating changes rather than the analyst's own reasoning, so it may not fill the gap it appears to
 - ~~Does `GRADE_SCALE` cover the firms that actually rate these accounts?~~ — closed 2026-08-30: 99.8% coverage on 1,138 real NVDA grade actions. The only gap was the bare string "Perform", now mapped to neutral. The `grade_vocabulary_known` expectation is what surfaced it
+- **Cross-account trends, retrieved-source overlap half:** deliberately not built (2026-09-09, see Decisions) — all three live accounts share the `_industry` sentinel, so a naive detector on retrieved-chunk overlap would fire on plain sector membership constantly. Telling a real cross-cutting theme from that is the open problem the backlog originally flagged; still unsolved. Does a portfolio episode ever get built, and if so does it get its own comprehension questions? Also still open — out of scope for the metric-correlation version that shipped
 
 ## Decisions
 
@@ -221,53 +222,6 @@ Risks to weigh before doing it:
 Until then the guard is what stands between a teaser and a confident invented
 number, so it should not be removed when this lands - it should be the test
 that proves this worked.
-
-### Cross-account trends
-
-With several accounts, surface the themes that cut across them rather than
-rediscovering each one company by company.
-
-**The sharper argument is repetition, not portfolio insight.** A rep plays
-several of these back to back. If memory pricing is squeezing margins at three
-accounts, they hear the same explanation three times. That does not only waste
-minutes - it trains them to tune out, which undermines the recall loop the whole
-project rests on. Cross-account awareness lets one episode carry the full
-explanation and the others reference it in a sentence: "same memory pressure you
-heard about on the NVIDIA episode, and here is how it lands differently here."
-That alone justifies building it, even with no dedicated portfolio episode.
-
-**The architecture is already half-shaped for this.** Industry trend chunks
-carry the sentinel `account_id = '_industry'` precisely because they describe a
-sector rather than a company, and macro deliberately never triggers a mode for
-the same reason. Both are already signals that are not tied to one account. A
-cross-account theme is the same shape, one level up.
-
-**Detection can reuse what exists.** The cleanest signal is retrieval itself: if
-the same trend chunk or macro condition is pulled as relevant for three of four
-accounts on the same day, that is a shared theme by construction, with no new
-inference needed. Correlated metric movement - margins compressing across the
-portfolio - is the richer version and needs only the metric context tables that
-already exist.
-
-**The risk worth writing down.** Accounts in the same industry will always look
-correlated. "All semiconductor companies face memory pricing" is a tautology,
-not an insight, and a naive detector would surface it constantly. The useful
-signal is a theme that cuts across sectors, or one that hits accounts
-differently enough that the difference is the story. Whatever detects this needs
-a way to tell a real cross-cutting theme from plain sector membership, or it
-will produce confident noise.
-
-Open questions:
-- Where does it sit in the mode hierarchy? Probably below earnings and news, but
-  plausibly above a quiet day, since a portfolio theme beats an empty topic queue.
-- Does a portfolio episode get comprehension questions? The gaps would not belong
-  to any single account's callback.
-
-Blocked on having a second account, which is already needed for correctness
-testing - every NVDA-shaped assumption in the concept priority lists, the
-Operator-handover rule and the fiscal calendar handling needs a second company to
-shake out. Cross-account trends need at least two or three before there is
-anything to correlate.
 
 ## Planned decisions (phase 2)
 
@@ -454,3 +408,4 @@ tooling, and phase 2 is fully scriptable.
 - 2026-09-09 — A model response that is not parseable JSON turns falls back to a single HOST_A turn holding the raw text, rather than failing the run — the same degrade-gracefully pattern already used for `EPISODE_META_PROMPT` and `QUESTIONS_PROMPT`, extended here to the primary generation call for the first time. An episode narrates as a monologue rather than not publishing at all
 - 2026-09-09 — The backlog's open risk — whether grading targets the whole conversation or only the substantive claims in it — is resolved for phase 1 by not narrowing it: `EPISODE_META_PROMPT` and `QUESTIONS_PROMPT` keep taking the full concatenated dialogue, including HOST_B's pushback, exactly as they took the full monologue before. Smallest change that ships phase 1 without inventing a filtering rule; revisit if comprehension questions start targeting a host's scepticism rather than a fact about the account
 - 2026-09-09 — `parse_turns` and `concat_turns` (`src/briefing/synthesize.py`) extracted as pure functions rather than left inline in `main()`, the way `grade.py`'s JSON parsing was — matching `figures()` and `first_point()`, which exist as functions precisely so they are testable with no Spark or Databricks SDK dependency. `tests/test_turns.py` uses the same `ast`-extraction technique as `test_grounding.py` and `test_macro_units.py`
+- 2026-09-09 — Cross-account trends built as metric correlation only, not retrieved-source overlap — the Backlog's two candidate signals, and only one shipped. `gold_cross_account_themes` (`src/pipelines/cross_account_themes.py`, a new DLT table added to `signals.pipeline.yml`, run once daily across every account inside the existing 05:00 ET ingest job — no new job resource) reads `silver_metric_context`, takes each account's OWN most recent reported quarter (accounts file on different fiscal calendars, so a shared calendar day is the wrong grain — see the file's docstring), and flags where 2+ accounts move the same direction on the same metric AND the same basis (QoQ never compared to YoY, per VOICE_RULES). It reuses the exact EXPANDED/COMPRESSED/ACCELERATING/SLOWING words `synthesize.py` already speaks for these numbers rather than inventing a second vocabulary, so a flagged theme can never contradict what the model says about its own figure. `synthesize.py` reads it (try/except, absence normal, same pattern as macro and the recall callback) for the exact (account, period) pair already used for `context_lines`, and passes at most one theme into the prompt as one more optional fact block, skipped on Mode C. The prompt instructs at most one sentence, only where the model is already discussing that metric, and forbids stating or estimating the other account's own numbers — it was given only that the direction matches, nothing else. The backlog's other signal — retrieved-source overlap via `gold_briefing.lineage` — was deliberately NOT built: all three live accounts are semiconductor/tech-adjacent, and industry_trend chunks carry the sentinel `account_id = '_industry'` shared across every account by construction (`chunk_and_embed.py`), so a naive overlap detector would fire on that sentinel constantly — "all semiconductor companies face memory pricing" is a tautology, not an insight — and the backlog itself flags telling a real cross-cutting theme from plain sector membership as an unsolved problem, not one to solve algorithmically here. Metric correlation is a specific, checkable numeric fact rather than "the same generic chunk got retrieved," so it is the one implemented, per the task's instruction to weight it as primary. No portfolio episode was built — the backlog explicitly said a one-sentence in-episode echo justifies this alone — and whether a portfolio episode should exist, with its own comprehension questions, is left open in Open questions above rather than decided here
