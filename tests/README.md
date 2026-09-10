@@ -4,5 +4,7 @@ Unit-test the pure logic that does not need a workspace:
   (QoQ/YoY, division by zero, missing quarters)
 - chunking boundaries in `src/pipelines/chunk_and_embed.py`
 - grade JSON parsing in `src/grading/grade.py`
+- two-host turn parsing and concatenation in `src/briefing/synthesize.py`
+  (`parse_turns`, `concat_turns`) — `test_turns.py`
 
 Prompt quality belongs in MLflow evaluation, not here.
