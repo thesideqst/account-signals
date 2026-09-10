@@ -10,15 +10,29 @@ The briefing prompt should carry only passages relevant to one account, not
 whole documents. Retrieval keeps the prompt small and makes every claim
 traceable back to a source row.
 
-TWO CHUNKING STRATEGIES, ONE TABLE
+CHUNKING STRATEGIES, ONE TABLE
 Transcripts already have natural boundaries: a speaker turn is one complete
 thought by one person. Splitting mid-turn makes attribution ambiguous, and
 attribution is the whole point of this source. So transcript chunks follow
 turns, and only a turn that exceeds the embedding window gets split further —
 on sentence boundaries, keeping speaker and role on every piece.
 
-News, trends and macro have no such structure, so those fall back to
-overlapping windows sized to the embedding model.
+SEC filing exhibits (press releases, CFO commentary) use the same
+sentence-boundary packing, for the same reason: a 22,000-character exhibit
+averaged over one vector dilutes a query about margins across twenty other
+topics in the document.
+
+Industry trends carry no such length, so those stay one chunk per item:
+title and summary concatenated, whatever that comes out to.
+
+News is a genuine either/or, not a fallback. Most rows have no article body —
+the RSS feeds carry a headline and a sentence — so those stay one chunk per
+item, same as trends. A row that DOES carry a full body (see news.py /
+news_extract.py; nothing does today, see ALLOWED_PUBLISHERS there) is packed
+the same sentence-boundary way as a transcript turn or a filing exhibit,
+title glued on as the anchor of the first part. Reusing the mechanism rather
+than inventing a third one means this path is already correct the day a
+publisher's articles start arriving with real bodies.
 
 The union carries transcript-only columns as NULL for other sources. That is
 deliberate: a single table keeps retrieval one query, and a NULL `speaker` on
@@ -217,8 +231,17 @@ def silver_doc_chunks():
         ).otherwise(names_the_company)
 
     # News IS account-specific, so it carries the real symbol rather than the
-    # _industry sentinel. Headlines are short, so one item is one chunk.
-    news = (
+    # _industry sentinel.
+    #
+    # bronze_news carries an optional `body` column (src/ingest/news.py, via
+    # news_extract.py) - full article text for a publisher named in that
+    # module's ALLOWED_PUBLISHERS, NULL for everyone else. That allowlist is
+    # currently empty, so `body` is NULL on every row and every item still
+    # takes the ONE-CHUNK-PER-ITEM path below, unchanged from before `body`
+    # existed. This split is here so the chunking is already correct the day
+    # a publisher gets added to the allowlist, rather than needing a second
+    # change at that point.
+    news_base = (
         dlt.read("bronze_news")
         .filter(F.length(F.col("title")) > 0)
         .filter(names_the_company)
@@ -235,6 +258,20 @@ def silver_doc_chunks():
                           "yyyy-MM-dd"),
             ),
         )
+        # Google News nests the outlet; Yahoo often leaves it blank.
+        .withColumn(
+            "resolved_publisher",
+            F.coalesce(F.nullif(F.col("publisher"), F.lit("")), F.col("source")),
+        )
+    )
+    has_body = F.col("body").isNotNull() & (F.length(F.trim(F.col("body"))) > 0)
+
+    # Branch 1: no body (today's behaviour for every row, unchanged). One
+    # chunk per item: title + summary concatenated, whatever its length -
+    # this is what makes a short item read as HEADLINE ONLY in synthesize.py.
+    news_headline_only = (
+        news_base
+        .filter(~has_body)
         .select(
             F.col("symbol").alias("account_id"),
             F.lit("news").alias("source_type"),
@@ -250,13 +287,75 @@ def silver_doc_chunks():
             F.lit(0).alias("part_index"),
             F.lit(1).alias("sentence_count"),
             F.length(F.concat_ws(". ", F.col("title"), F.col("summary"))).alias("char_count"),
-            # Google News nests the outlet; Yahoo often leaves it blank.
-            F.coalesce(F.nullif(F.col("publisher"), F.lit("")),
-                       F.col("source")).alias("publisher"),
+            F.col("resolved_publisher").alias("publisher"),
             F.col("title").alias("headline"),
             F.lit(None).cast("struct<fiscal_year:int,fiscal_quarter:int>").alias("period"),
         )
     )
+
+    # Branch 2: a real article body. Reuses the sentence-boundary packing
+    # already proven for transcript turns and filing exhibits above (same
+    # MAX_CHUNK_CHARS) rather than inventing a third windowing scheme.
+    #
+    # The title is glued to the front of the body with ". " before splitting,
+    # so it becomes the anchor sentence of part 0 - "title. first real
+    # sentence. second sentence. ..." - the same way a human would read the
+    # headline before the article. Parts after the first do not repeat the
+    # title in chunk_text, but every part still carries it in the separate
+    # `headline` column below, so context is never actually lost even for a
+    # chunk pulled from deep in a long article.
+    news_with_body = news_base.filter(has_body)
+    news_sentences = (
+        news_with_body
+        .withColumn("full_text", F.concat_ws(". ", F.col("title"), F.col("body")))
+        .select(
+            "*",
+            F.posexplode(F.split(F.col("full_text"), r"(?<=[.!?])\s+"))
+             .alias("sent_pos", "sentence"),
+        )
+        .filter(F.length("sentence") > 0)
+    )
+    news_running = (
+        Window.partitionBy("url").orderBy("sent_pos")
+        .rowsBetween(Window.unboundedPreceding, Window.currentRow)
+    )
+    news_packed = (
+        news_sentences
+        .withColumn("cum_chars", F.sum(F.length("sentence") + 1).over(news_running))
+        .withColumn("part_index", F.floor(
+            (F.col("cum_chars") - F.length("sentence") - 1)
+            / F.lit(MAX_CHUNK_CHARS)).cast("int"))
+    )
+    news_full_articles = (
+        news_packed
+        .groupBy("symbol", "source", "url", "title", "published",
+                 "resolved_publisher", "part_index")
+        .agg(F.concat_ws(" ", F.sort_array(F.collect_list(
+                F.struct(F.col("sent_pos"), F.col("sentence"))))
+                .getField("sentence")).alias("chunk_text"))
+        .select(
+            F.col("symbol").alias("account_id"),
+            F.lit("news").alias("source_type"),
+            F.col("published").alias("published_at"),
+            F.col("url"),
+            F.concat_ws(":", F.lit("news"), F.col("source"),
+                        F.abs(F.hash("url")).cast("string"),
+                        F.col("part_index").cast("string")).alias("chunk_id"),
+            F.col("chunk_text"),
+            F.lit(None).cast("string").alias("speaker"),
+            F.lit(None).cast("string").alias("role"),
+            F.lit(None).cast("string").alias("section"),
+            F.lit(None).cast("int").alias("turn_index"),
+            F.col("part_index"),
+            F.lit(1).alias("sentence_count"),
+            F.length(F.col("chunk_text")).alias("char_count"),
+            F.col("resolved_publisher").alias("publisher"),
+            F.col("title").alias("headline"),
+            F.lit(None).cast("struct<fiscal_year:int,fiscal_quarter:int>").alias("period"),
+        )
+    )
+
+    news = news_headline_only.unionByName(news_full_articles)
 
     # SEC 8-K filings and their press-release exhibits. These are the answer to
     # the headline problem: a news chunk averages 186 characters, a filing

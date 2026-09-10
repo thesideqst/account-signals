@@ -14,12 +14,19 @@ def spark() -> SparkSession:
 
 
 def bronze_write(df, catalog: str, schema: str, table: str) -> None:
-    """Append to a Bronze table, stamping ingest time for lineage."""
+    """Append to a Bronze table, stamping ingest time for lineage.
+
+    `mergeSchema` is on because a source's SCHEMA can grow a new nullable
+    column (e.g. news.py adding `body`) without a backfill of the existing
+    table - Delta only allows this to widen (add columns), never to drop or
+    retype one, so it can't silently mask a real schema break elsewhere.
+    """
     from pyspark.sql import functions as F
 
     (
         df.withColumn("_ingested_at", F.lit(datetime.now(timezone.utc)))
         .write.mode("append")
+        .option("mergeSchema", "true")
         .saveAsTable(f"{catalog}.{schema}.bronze_{table}")
     )
 
