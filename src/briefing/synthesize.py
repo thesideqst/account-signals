@@ -727,7 +727,31 @@ def main() -> None:
           AND published_at >= date_sub(current_date(), 10)
         ORDER BY published_at DESC LIMIT 18
     """).collect()
-    news_lines = [source_line(n, 260) for n in news_rows]
+    # SEC filings for this account: 8-K press releases and CFO commentary.
+    # These are the substantive half of "news" - 202 of 209 filing chunks carry
+    # more than 300 characters, against 30 of 610 news chunks - so they are
+    # retrieved separately and placed FIRST, ahead of the headlines. A headline
+    # says what is being talked about; a filing says what actually happened,
+    # in the company's own words.
+    filing_rows = spark.sql(f"""
+        SELECT publisher, headline, url, chunk_text, published_at, section
+        FROM {catalog}.{schema}.silver_doc_chunks
+        WHERE source_type = 'filing' AND account_id = '{account}'
+          AND published_at >= date_sub(current_date(), 120)
+        ORDER BY published_at DESC, char_count DESC
+        LIMIT 8
+    """).collect()
+    # A filing carries WHY it was filed, in words, from the 8-K item code.
+    filing_lines = [
+        f"- KIND: ARTICLE | PUBLICATION: SEC filing"
+        f" | HEADLINE: {f['headline']} | DATE: {f['published_at']}"
+        f" | FILED BECAUSE: {f['section'] or 'not stated'}"
+        f" | TEXT: {(f['chunk_text'] or '')[:900]}"
+        for f in filing_rows
+    ]
+    print(f"filings: {len(filing_lines)} passage(s) from SEC 8-K documents")
+
+    news_lines = filing_lines + [source_line(n, 260) for n in news_rows]
     stubs = sum(1 for n in news_rows
                 if len((n["chunk_text"] or "").strip()) <= STUB_CHARS)
     print(f"news: {len(news_lines)} items, {stubs} of them headline-only")
@@ -899,6 +923,7 @@ def main() -> None:
             bronze_row("SEC EDGAR XBRL", "bronze_xbrl_facts"),
             bronze_row("Earnings call (Roic AI)", "bronze_transcript_turns"),
             bronze_row("News (Google, Yahoo)", "bronze_news"),
+            bronze_row("SEC filings (8-K)", "bronze_filing_documents"),
             bronze_row("Analyst grades (FMP)", "bronze_analyst_ratings"),
             bronze_row("Industry trends (RSS)", "bronze_industry_trends",
                        scoped=False),
@@ -919,9 +944,12 @@ def main() -> None:
              "note": "management framing",
              "items": [f"{c['speaker']} ({c['section']}): "
                        f"{(c['chunk_text'] or '')[:150]}" for c in chunks[:12]]},
-            {"table": "silver_doc_chunks (news)", "used": len(news_lines),
+            {"table": "silver_doc_chunks (news)", "used": len(news_rows),
              "note": "headlines",
              "items": [f"{n['publisher']}: {n['headline']}" for n in news_rows[:14]]},
+            {"table": "silver_doc_chunks (filing)", "used": len(filing_rows),
+             "note": "SEC 8-K press releases and CFO commentary",
+             "items": [f"{f['publisher']}: {f['headline']}" for f in filing_rows[:14]]},
             {"table": "silver_doc_chunks (trends)", "used": len(trend_lines),
              "note": "industry context",
              "items": [f"{t['publisher']}: {t['headline']}" for t in trend_rows[:14]]},
@@ -943,6 +971,11 @@ def main() -> None:
              "url": t["url"], "kind": "industry",
              "published_at": str(t["published_at"])}
             for t in trend_rows if t["url"]
+        ] + [
+            {"publisher": f["publisher"], "headline": f["headline"],
+             "url": f["url"], "kind": "filing",
+             "published_at": str(f["published_at"])}
+            for f in filing_rows if f["url"]
         ],
         "gold": {"mode": mode, "mode_reason": mode_reason,
                  "prompt_chars": len(prompt), "model": endpoint},
