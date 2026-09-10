@@ -13,6 +13,16 @@ a prompt problem. An agent deciding both at once would blur the two.
 
 VOICE_RULES is shared by every mode. Each rule below was added after a specific
 failure - see the 2026-08-30 entries in SCOPE.md.
+
+TWO HOSTS, NOT ONE NARRATOR (2026-09-09, phase 1 of the Backlog item of the
+same name). The model now writes a conversation between HOST_A and HOST_B
+instead of a monologue, and replies with a JSON array of turns instead of
+prose - see DIALOGUE_RULES below. PHASES still carries the four-phase content
+requirements per mode, unchanged; DIALOGUE_RULES only changes who says it and
+in what shape. `synthesize.py` parses the array, then concatenates the turn
+text back into the same flat `script` string every guard and every downstream
+consumer - TTS, grading, the meta/questions calls - already expects. Text and
+turns only in this phase; per-voice audio is deliberately phase 2.
 """
 
 # The show's name, spoken once in the opening line. One constant because it is
@@ -124,21 +134,68 @@ Quote sparingly. A few short phrases in someone's own words land harder than lon
 passages. You are not summarising the call - you are explaining what happened, using the
 call as evidence. If a paragraph could be replaced by listening to the call itself, cut it.
 Never walk through the call in the order it happened. Organise around what matters.
-Do not flatter the company and do not editorialise about the stock.
+Do not flatter the company and do not editorialise about the stock."""
 
-Write only the script."""
+
+DIALOGUE_RULES = """TWO HOSTS, NOT ONE NARRATOR
+
+This is a conversation between two hosts, HOST_A and HOST_B, not a monologue read by one
+narrator. HOST_A lays out what happened - the numbers, the news, the mechanism. HOST_B is
+the account exec's stand-in: the person in the room asking the question a rep would
+actually ask.
+
+HOST_B DOES NOT ALREADY KNOW THE ANSWER. Write HOST_B's questions as real questions, not as
+a straight line feeding HOST_A a cue. If a question could only be asked by someone who
+already knows what HOST_A is about to say, rewrite it. "Wait, margins held at 75 but
+they're guiding to 71 next quarter - what changed?" is a real question, because HOST_B does
+not yet know why that gap exists. "So margins held at 75 percent, right?" is not a
+question, it is HOST_A's line wearing a question mark.
+
+HOST_B PUSHES, NOT AFFIRMS. Two hosts agreeing with each other is worse than one host
+talking. HOST_B's job is scepticism: "wait, what does that actually mean", "why should
+that hold next quarter", "isn't that what management said last time too". Every HOST_B turn
+either asks something HOST_A has not yet answered, pushes back on what HOST_A just said, or
+asks HOST_A to explain a term or mechanism in plain language. HOST_B never simply restates
+or praises HOST_A's point.
+
+CAP THE FILLER. Ten minutes of back-and-forth carries less density than ten minutes of
+narration read straight through, and the whole point of this briefing is that a rep gets
+current fast. The conversation format is packaging, not an excuse to say less - every fact,
+figure and relationship the mode's core section demands still has to land somewhere in the
+dialogue. No "that's a great question", no "absolutely", no throat-clearing agreement, no
+turn that exists only to hand the microphone back. Every turn either adds a fact, asks a
+real question, or pushes on what was just said.
+
+EVERY VOICE RULE ABOVE APPLIES TO EVERY TURN, FROM EITHER HOST. Numbers as digits, one
+headline figure per paragraph, no fact not in the data you were given, no third-person
+reference to the rep, attribution for anything outside the filings - none of that changes
+because there are two speakers now. The grounding rule is unchanged; it is just spread
+across two voices instead of one, and a fact HOST_B is not allowed to already know is still
+a fact neither host may invent.
+
+FORMAT OF YOUR REPLY. Do not write prose with speaker labels. Reply with a JSON array of
+turns and nothing else - no text before or after it:
+
+[{"speaker": "host_a", "text": "..."}, {"speaker": "host_b", "text": "..."}, ...]
+
+Each "text" value is exactly what that host says aloud, subject to every rule above and in
+AUDIO-FIRST FORMATTING AND VOICE. Keep turns short - a sentence or two each, the way people
+actually trade a conversation, not paragraph-long speeches - and move through the four
+phases below across many short turns rather than four long monologues handed back and
+forth."""
 
 
 PHASES = """NARRATIVE ARCHITECTURE
 
-Write one continuous spoken narrative that moves through four phases. The listener should
-feel the structure, never hear it.
+Write a conversation between HOST_A and HOST_B that moves through four phases together. The
+listener should feel the structure, never hear it, and should feel two people talking, not
+a script cut in half.
 
 Do not write the phase names anywhere in the script - not as headings, not in brackets, not
 as stage directions like "[Cold open]" or "[Core analysis - first metric]". There is no
-page. Anything you type is spoken aloud, so a bracketed label becomes the narrator reading
-"open square bracket, core analysis". Move between phases with a sentence, the way a person
-changes subject out loud.
+page. Anything either host says is spoken aloud, so a bracketed label becomes a host reading
+"open square bracket, core analysis". Move between phases the way a conversation actually
+turns a corner - a question, a follow-on, a new fact - never with a scene change.
 
 1. COLD OPEN AND CALLBACK (about 1.5 minutes)
 Open with ONE short line naming the show and the account, and nothing else:
@@ -415,6 +472,10 @@ def build(mode: str, account: str, deltas: str, framing: str, context: str = "",
         numbers_block if mode == "B" else news_block,
         phases,
         VOICE_RULES,
+        # Last, deliberately: the reply-format instruction (JSON, not prose)
+        # is the most load-bearing rule in the whole prompt and belongs where
+        # the model reads it right before answering.
+        DIALOGUE_RULES,
     ]
     return "\n\n".join(p for p in parts if p and p.strip())
 
@@ -427,7 +488,8 @@ MODE_LABELS = {
     "C": "Deep dive",
 }
 
-EPISODE_META_PROMPT = """Here is a briefing script about {account}.
+EPISODE_META_PROMPT = """Here is a briefing script about {account} - written as a
+conversation between two hosts, not a monologue.
 
 Write two things for the page a rep sees before they press play.
 
@@ -449,7 +511,8 @@ Script:
 {script}"""
 
 
-QUESTIONS_PROMPT = """Here is a briefing script about {account}.
+QUESTIONS_PROMPT = """Here is a briefing script about {account} - written as a
+conversation between two hosts, not a monologue.
 
 Write three comprehension questions for the rep who just listened to it.
 

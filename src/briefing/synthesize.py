@@ -232,6 +232,56 @@ def extract_text(content) -> str:
     return "\n".join(parts)
 
 
+def parse_turns(text: str):
+    """Parse the model's two-host dialogue response into a list of turns.
+
+    Mirrors the EPISODE_META_PROMPT/QUESTIONS_PROMPT pattern in `main()`: an
+    optional fenced block is stripped, then the JSON is sliced between the
+    first `[` and the last `]` rather than trusted to be bare. A turn only
+    survives if its speaker is 'host_a' or 'host_b' and its text is
+    non-empty - a hallucinated third speaker, a missing field, or a non-dict
+    item is dropped rather than trusted.
+
+    Returns (turns, error). `error` is None whenever parsing itself
+    succeeded, even if every turn inside failed validation and `turns` comes
+    back empty - that is "nothing usable", not "could not parse", and
+    `main()` treats the two differently for what it prints. On a JSON
+    failure `error` is a short string describing what broke, the same detail
+    the two other prompts' `except Exception as e` clauses already surface.
+    """
+    if not text:
+        return [], None
+    t = text.strip()
+    if "```" in t:
+        t = t.split("```")[1].removeprefix("json").strip()
+    try:
+        parsed = json.loads(t[t.index("["):t.rindex("]") + 1])
+    except Exception as e:
+        return [], f"{type(e).__name__}: {e}"
+    turns = []
+    for item in parsed:
+        if not isinstance(item, dict):
+            continue
+        speaker = str(item.get("speaker", "")).strip().lower()
+        turn_text = str(item.get("text", "")).strip()
+        if speaker in ("host_a", "host_b") and turn_text:
+            turns.append({"speaker": speaker, "text": turn_text})
+    return turns, None
+
+
+def concat_turns(turns) -> str:
+    """The flat, narration-ready string every existing consumer expects.
+
+    Turns are joined with a blank line so the density guard's per-paragraph
+    scan (which splits the script on a bare newline) still sees roughly one
+    host's turn per paragraph - the same granularity a monologue's own
+    paragraph breaks gave it - and so TTS's paragraph-boundary split
+    (`split_for_speech` in tts.py, untouched by this change) still lands
+    between turns rather than mid-sentence.
+    """
+    return "\n\n".join(t["text"] for t in turns if t.get("text"))
+
+
 def first_point(text: str, limit: int = 240) -> str:
     """Reduce a recorded gap to the one point the cold open can carry.
 
@@ -789,15 +839,45 @@ def main() -> None:
         # The SDK wants typed ChatMessage objects; plain dicts fail with
         # "'dict' object has no attribute 'as_dict'".
         messages=[ChatMessage(role=ChatMessageRole.USER, content=prompt)],
-        max_tokens=4000,
+        # Raised from 4000: the response is now a JSON array of turns, and
+        # the per-turn {"speaker": ..., "text": ...} structure and quoting
+        # costs tokens the target word count (still 1,400-2,200 words,
+        # unchanged by the dialogue format) does not account for.
+        max_tokens=5000,
         temperature=0.4,
     )
     # gpt-oss models return content as a list of parts (reasoning plus text)
     # rather than a plain string, so pull the text out either way.
     raw = resp.choices[0].message.content
-    script = extract_text(raw)
-    if not script.strip():
+    raw_text = extract_text(raw)
+    if not raw_text.strip():
         raise RuntimeError(f"empty script; raw content type {type(raw)}: {str(raw)[:300]}")
+
+    # The model now writes a two-host conversation instead of a monologue
+    # (prompts.DIALOGUE_RULES), so the primary generation call returns a JSON
+    # array of turns rather than prose. `turns` is what gets stored as
+    # script_turns, for a future per-turn TTS pipeline; `script` stays the
+    # flat concatenated string every guard below, and every downstream
+    # consumer (TTS, grading, the meta/questions calls two below), already
+    # expects, so nothing past this point has to know a conversation happened.
+    turns, turns_err = parse_turns(raw_text)
+    if turns_err:
+        print(f"  WARNING could not parse turns ({turns_err})")
+    if not turns:
+        # Degrades the way EPISODE_META_PROMPT and QUESTIONS_PROMPT already
+        # do: a malformed or empty response does not fail the run. Falling
+        # back to the raw text as one HOST_A turn means script_text and every
+        # guard below still get something to work with, and the episode
+        # narrates as a monologue rather than not publishing at all.
+        if turns_err is None:
+            print("  WARNING could not parse turns (no valid host_a/host_b "
+                  "turns in the response)")
+        turns = [{"speaker": "host_a", "text": raw_text.strip()}]
+    host_a_n = sum(1 for t in turns if t["speaker"] == "host_a")
+    host_b_n = sum(1 for t in turns if t["speaker"] == "host_b")
+    print(f"turns: {len(turns)} ({host_a_n} host_a, {host_b_n} host_b)")
+
+    script = concat_turns(turns)
     # The prompt forbids anything silent when spoken. Check rather than trust:
     # the model dropped eight bullet points into the previous version.
     import re as _re
@@ -1032,18 +1112,43 @@ def main() -> None:
     for t in takeaways:
         print(f"  takeaway: {t[:95]}")
 
+    # script_turns is new (2026-09-09, Two-host conversation, phase 1): the
+    # JSON turn array {speaker, text} backing a future per-turn audio
+    # pipeline, stored alongside script_text - which keeps being the
+    # concatenated-for-narration string it always was, unchanged in shape, so
+    # tts.py, grading and the meta/questions calls above need no changes.
+    # Adding a column to a table this table already wrote rows into needs
+    # either an explicit ALTER TABLE or mergeSchema on the write; both are
+    # used here rather than either alone. ALTER TABLE ADD COLUMNS is the
+    # documented, idempotent way to widen an existing Delta table and is what
+    # makes existing rows come back with script_turns = NULL rather than a
+    # backfilled guess at a conversation that was never generated - there is
+    # no source to reconstruct it from. It is wrapped in try/except because it
+    # fails (harmlessly) on the very first run in a fresh workspace, before
+    # gold_briefing exists at all; mergeSchema on the write is the second,
+    # cheaper safety net for that case and for any other schema drift.
+    try:
+        spark.sql(f"""
+            ALTER TABLE {catalog}.{schema}.gold_briefing
+            ADD COLUMNS (script_turns STRING)
+        """)
+    except Exception as e:
+        print(f"  ALTER TABLE ADD COLUMNS script_turns skipped: {type(e).__name__}")
+
     spark.createDataFrame(
         [(briefing_id, account, str(period), now, mode, mode_reason,
           episode_title, mode_label, json.dumps(takeaways),
-          json.dumps(questions), json.dumps(lineage), script, words,
+          json.dumps(questions), json.dumps(lineage), script,
+          json.dumps(turns), words,
           endpoint, json.dumps([r["metric"] for r in deltas]), len(chunks), len(prompt))],
         "briefing_id string, account_id string, period_end string, "
         "generated_at timestamp, mode string, mode_reason string, "
         "episode_title string, mode_label string, takeaways string, questions string, "
         "lineage string, "
-        "script_text string, word_count int, "
+        "script_text string, script_turns string, word_count int, "
         "model string, metrics string, chunk_count int, prompt_chars int",
-    ).write.mode("append").saveAsTable(f"{catalog}.{schema}.gold_briefing")
+    ).write.mode("append").option("mergeSchema", "true").saveAsTable(
+        f"{catalog}.{schema}.gold_briefing")
 
     # Readers want the newest script per account and should not have to know
     # that older generations sit underneath it.
