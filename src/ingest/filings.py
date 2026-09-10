@@ -144,6 +144,20 @@ def describe(items: str) -> str:
     return "; ".join(known)
 
 
+def filing_title(is_primary: bool, form: str, item_description: str, text: str) -> str:
+    """The document's headline - shown in provenance and sent to the model.
+
+    The opening line of a press release IS its headline, true for an EX-99
+    exhibit. It is NOT true for the cover page: its own opening line is SEC's
+    boilerplate ("FORM 8-K CURRENT REPORT PURSUANT TO SECTION 13 OR 15(d)..."),
+    identical on every filing and not a headline. The cover page is titled by
+    what it discloses instead, which `describe()` already turns into words.
+    """
+    if not is_primary:
+        return text[:180]
+    return f"{form} cover page - {item_description or 'filed disclosure'}"
+
+
 def recent_8ks(symbol: str, cik: str):
     """Newest 8-K filings for one company, inside the lookback window."""
     from datetime import date, timedelta
@@ -238,6 +252,7 @@ def documents(symbol: str, cik: str, filing: dict):
         if text[:60].startswith(("SEC EDGAR Submission",
                                  "EDGAR Filing Documents for")):
             continue
+        item_description = describe(filing["items"])
         yield {
             "symbol": symbol,
             "cik": cik,
@@ -247,9 +262,8 @@ def documents(symbol: str, cik: str, filing: dict):
             "document": name,
             "exhibit_type": "cover" if is_primary else (etype or "exhibit"),
             "items": filing["items"] or "",
-            "item_description": describe(filing["items"]),
-            # The opening line of a press release IS its headline.
-            "title": text[:180],
+            "item_description": item_description,
+            "title": filing_title(is_primary, filing["form"], item_description, text),
             "text": text,
         }
         time.sleep(0.2)

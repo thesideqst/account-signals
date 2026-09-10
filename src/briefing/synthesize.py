@@ -923,6 +923,7 @@ def main() -> None:
             bronze_row("SEC EDGAR XBRL", "bronze_xbrl_facts"),
             bronze_row("Earnings call (Roic AI)", "bronze_transcript_turns"),
             bronze_row("News (Google, Yahoo)", "bronze_news"),
+            bronze_row("SEC filings (8-K)", "bronze_filing_documents"),
             bronze_row("Analyst grades (FMP)", "bronze_analyst_ratings"),
             bronze_row("Industry trends (RSS)", "bronze_industry_trends",
                        scoped=False),
@@ -943,9 +944,12 @@ def main() -> None:
              "note": "management framing",
              "items": [f"{c['speaker']} ({c['section']}): "
                        f"{(c['chunk_text'] or '')[:150]}" for c in chunks[:12]]},
-            {"table": "silver_doc_chunks (news)", "used": len(news_lines),
+            {"table": "silver_doc_chunks (news)", "used": len(news_rows),
              "note": "headlines",
              "items": [f"{n['publisher']}: {n['headline']}" for n in news_rows[:14]]},
+            {"table": "silver_doc_chunks (filing)", "used": len(filing_rows),
+             "note": "SEC 8-K press releases and CFO commentary",
+             "items": [f"{f['publisher']}: {f['headline']}" for f in filing_rows[:14]]},
             {"table": "silver_doc_chunks (trends)", "used": len(trend_lines),
              "note": "industry context",
              "items": [f"{t['publisher']}: {t['headline']}" for t in trend_rows[:14]]},
@@ -967,6 +971,11 @@ def main() -> None:
              "url": t["url"], "kind": "industry",
              "published_at": str(t["published_at"])}
             for t in trend_rows if t["url"]
+        ] + [
+            {"publisher": f["publisher"], "headline": f["headline"],
+             "url": f["url"], "kind": "filing",
+             "published_at": str(f["published_at"])}
+            for f in filing_rows if f["url"]
         ],
         "gold": {"mode": mode, "mode_reason": mode_reason,
                  "prompt_chars": len(prompt), "model": endpoint},
