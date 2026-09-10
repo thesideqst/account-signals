@@ -154,6 +154,20 @@ proves the pipeline; the conversation is a format change on top of it.
 
 ### Full-article news, not headlines and teasers
 
+**Pipeline built and shipped DISABLED 2026-09-09** — see the dated entries in
+the Decisions log. `src/ingest/news_extract.py` fetches and extracts article
+bodies via `trafilatura`, `chunk_and_embed.py` packs a real body the same
+sentence-boundary way transcript turns and filing exhibits are, and a
+conservative paywall/consent-wall guard (`looks_like_paywall_or_stub`) stops
+boilerplate from being filed as `KIND: ARTICLE`. None of it runs today: every
+fetch is gated behind `news_extract.ALLOWED_PUBLISHERS`, which ships empty —
+see "Terms of service" under Risks below, which is exactly why. **What's
+actually left is not engineering, it's a decision:** pick zero, one, or a
+handful of publishers whose terms make scraping their article bodies
+acceptable (a wire/syndication feed or a licensed API is the cleaner shape
+than a general-purpose news site's own pages — see "A licensed API" below),
+and add them to that set.
+
 The single largest source of fabrication in this pipeline is that the news it
 retrieves is not articles. **410 of 430 news chunks are 300 characters or
 fewer** - a headline plus a truncated teaser - because Google News and Yahoo
@@ -196,6 +210,28 @@ Risks to weigh before doing it:
 Until then the guard is what stands between a teaser and a confident invented
 number, so it should not be removed when this lands - it should be the test
 that proves this worked.
+
+### Topic queue staleness policy
+
+`app.topic_requests` -> `topic_queue_current` -> Mode C has no expiry (see
+Open questions above). A request sits in the queue exactly as eligible as it
+was on day one, first-in-first-out, until a quiet day finally reaches it —
+which, at three accounts and a thin queue, could be weeks after the rep
+asked and moved on. Two shapes, not mutually exclusive:
+
+- **Flat expiry.** Drop (or deprioritize) a request past some age, e.g. 30
+  days. Simple, one SQL change to `topic_queue_current`'s view definition or
+  to `pick_fallback_subject`'s query in `synthesize.py`. Risk: silently
+  discards a request the rep still wants, with no signal to them that it
+  happened.
+- **Rep-visible dismissal.** Surface queue age in the app's "Queued topics"
+  panel and let the rep pull a stale request themselves, or get asked "still
+  want this?" before it's used. More correct, but touches `static/index.html`
+  and a new `/api/topic/{request_id}` action, not just SQL.
+
+Default to flat expiry unless the UI affordance is worth the extra surface —
+a rep-visible signal is the better long-term answer, but the queue is thin
+enough today that either fixes the actual problem.
 
 ## Planned decisions (phase 2)
 
