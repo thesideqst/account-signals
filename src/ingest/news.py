@@ -17,6 +17,14 @@ happened and when", useless for depth. The briefing should use news to
 establish that an event occurred and let the filings and the call supply the
 substance. It is also what makes Mode B reachable: a news day with no filing
 and no earnings call is a single-event episode.
+
+OPTIONAL FULL-BODY EXTRACTION (news_extract.py) - CURRENTLY A NO-OP
+Each kept item is passed to `news_extract.maybe_extract_body()`, which fetches
+and extracts the article body ONLY for a publisher named in that module's
+`ALLOWED_PUBLISHERS` set. That set is empty, so this is a no-op today: `body`
+is NULL on every row and behaviour is unchanged from before this existed.
+Populating the allowlist is a per-publisher terms-of-service decision left for
+a human to make later - see news_extract.py's module docstring for why.
 """
 import html
 import re
@@ -52,8 +60,12 @@ import os
 
 # SEC and most feeds want a contact address in the User-Agent.
 UA = f"account_signals/0.1 ({os.environ.get('SEC_CONTACT', 'contact@example.com')})"
+# `body` is nullable and additive - NULL means "no full text", never "no
+# item". It never overwrites `summary`, which is what falls back to when body
+# is absent (i.e. every row today, since ALLOWED_PUBLISHERS is empty).
 SCHEMA = ("symbol string, source string, title string, url string, "
-          "published_at string, summary string, publisher string")
+          "published_at string, summary string, publisher string, "
+          "body string")
 
 
 def strip_html(text: str) -> str:
@@ -66,6 +78,7 @@ def fetch(symbol: str, source: str, url: str, terms):
     import re
 
     import feedparser
+    import news_extract
 
     pattern = re.compile("|".join(terms), re.I) if terms else None
     parsed = feedparser.parse(url, request_headers={"User-Agent": UA})
@@ -79,17 +92,26 @@ def fetch(symbol: str, source: str, url: str, terms):
             dropped += 1
             continue
         kept += 1
+        link = e.get("link", "")
+        # Google News nests the outlet; Yahoo puts it flat or not at all.
+        publisher = (e.get("source", {}).get("title", "")
+                     if isinstance(e.get("source"), dict)
+                     else str(e.get("source", "")))
+        # No-op unless `publisher` is in news_extract.ALLOWED_PUBLISHERS
+        # (empty today). Any failure - timeout, non-200, paywall, parse error
+        # - is caught inside maybe_extract_body and returns None there, same
+        # catch-log-continue convention as the per-feed try/except in main():
+        # one bad article fetch must not fail the whole news ingest task.
+        body = news_extract.maybe_extract_body(link, publisher)
         yield {
             "symbol": symbol,
             "source": source,
             "title": title,
-            "url": e.get("link", ""),
+            "url": link,
             "published_at": e.get("published", e.get("updated", "")),
             "summary": summary,
-            # Google News nests the outlet; Yahoo puts it flat or not at all.
-            "publisher": (e.get("source", {}).get("title", "")
-                          if isinstance(e.get("source"), dict)
-                          else str(e.get("source", ""))),
+            "publisher": publisher,
+            "body": body,
         }
 
 

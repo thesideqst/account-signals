@@ -13,6 +13,13 @@ resources:
             dependencies:
               - requests
               - feedparser
+              # Readability-style article body extraction, used by
+              # src/ingest/news_extract.py. Only actually imported (and only
+              # actually makes an HTTP call) for a publisher named in that
+              # module's ALLOWED_PUBLISHERS - empty today, so this dependency
+              # is present but unused in production until that allowlist
+              # gets its first entry.
+              - trafilatura
 
       parameters:
         - name: catalog
