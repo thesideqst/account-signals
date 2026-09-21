@@ -92,7 +92,8 @@ aren't there:
 - **`FAILED_JDBC.CONNECTION` on `account_signals_pg` is usually Lakebase being
   off, not credentials.** Federation hides the real cause. On 2026-09-21 it was
   "The endpoint has been disabled": the `primary` endpoint had been disabled
-  (cause unknown) and the `production` branch then archived for inactivity.
+  and the `production` branch then archived for inactivity. The cause was
+  almost certainly a Free Edition quota shutdown (next bullet).
   Federated queries neither report that nor wake it. Check
   `databricks postgres get-endpoint .../endpoints/primary` (`status.disabled`)
   and `get-branch .../branches/production` (`current_state`), re-enable with
@@ -100,6 +101,16 @@ aren't there:
   then open one direct `psycopg` connection to unarchive. The branch is now
   `is_protected`, so it should no longer archive; a disabled endpoint can
   still recur.
+- **This workspace is Free Edition, and going over quota stops everything.**
+  From 2026-09-15 to 09-21 no job runs were created even though every schedule
+  said `UNPAUSED`. The app was stopped, the warehouse returned "Cannot create
+  the resource", and the Lakebase endpoint was disabled. `system.billing.usage`
+  shows usage falling to near zero after 09-14. Lakebase was the biggest cost:
+  about 5.5 DBU/day at 1 CU, because the tier refuses changes to
+  `suspend_timeout_duration` (fixed at 24h: "cannot be modified for this
+  workspace tier"). Its min/max CU was lowered to 0.5 on 2026-09-21 to halve
+  that. If nothing has refreshed, check `system.billing.usage` by day before
+  debugging any single job.
 - **`resources/app.yml` needs `postgres:`, not `database:`.** They look
   interchangeable but address different backends (`database:` = legacy
   Lakebase instance; `postgres:` = Lakebase Autoscaling, by branch path). The
