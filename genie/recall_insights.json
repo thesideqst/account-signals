@@ -1,0 +1,129 @@
+{
+  "version": 2,
+  "config": {
+    "sample_questions": [
+      {"id": "10000000000000000000000000000001", "question": ["Which account do reps understand least, by average first-attempt score?"]},
+      {"id": "10000000000000000000000000000002", "question": ["Show the ten lowest-scoring answers this month and what was missed"]},
+      {"id": "10000000000000000000000000000003", "question": ["How has the average comprehension score moved week by week?"]},
+      {"id": "10000000000000000000000000000004", "question": ["How many topics are waiting in the queue, and how many came from missed questions?"]},
+      {"id": "10000000000000000000000000000005", "question": ["Do reps improve when they retry a question?"]}
+    ]
+  },
+  "data_sources": {
+    "tables": [
+      {"identifier": "workspace.account_signals_dev.gold_briefing"},
+      {"identifier": "workspace.account_signals_dev.gold_recall_grades"},
+      {"identifier": "workspace.account_signals_dev.recap_answers_current"},
+      {"identifier": "workspace.account_signals_dev.topic_queue_current"}
+    ]
+  },
+  "instructions": {
+    "example_question_sqls": [
+      {
+        "id": "20000000000000000000000000000001",
+        "question": ["Average first-attempt comprehension score by account"],
+        "sql": [
+          "WITH first_attempt AS (\n",
+          "  SELECT *, row_number() OVER (\n",
+          "    PARTITION BY briefing_id, rep_id, question_index ORDER BY answered_at) AS rn\n",
+          "  FROM workspace.account_signals_dev.recap_answers_current\n",
+          ")\n",
+          "SELECT account_id,\n",
+          "       count(*) AS questions_answered,\n",
+          "       count(score) AS questions_graded,\n",
+          "       round(avg(score), 1) AS avg_first_attempt_score\n",
+          "FROM first_attempt\n",
+          "WHERE rn = 1\n",
+          "GROUP BY account_id\n",
+          "ORDER BY avg_first_attempt_score"
+        ]
+      },
+      {
+        "id": "20000000000000000000000000000002",
+        "question": ["Lowest-scoring answers with what was missed and which episode they were about"],
+        "sql": [
+          "SELECT a.answered_at, a.account_id, b.episode_title, b.mode,\n",
+          "       a.question, a.score, a.missed\n",
+          "FROM workspace.account_signals_dev.recap_answers_current a\n",
+          "LEFT JOIN workspace.account_signals_dev.gold_briefing b ON b.briefing_id = a.briefing_id\n",
+          "WHERE a.score IS NOT NULL\n",
+          "  AND a.answered_at >= date_trunc('MONTH', current_date())\n",
+          "ORDER BY a.score ASC, a.answered_at DESC\n",
+          "LIMIT 10"
+        ]
+      },
+      {
+        "id": "20000000000000000000000000000003",
+        "question": ["Weekly trend of average first-attempt score"],
+        "sql": [
+          "WITH first_attempt AS (\n",
+          "  SELECT *, row_number() OVER (\n",
+          "    PARTITION BY briefing_id, rep_id, question_index ORDER BY answered_at) AS rn\n",
+          "  FROM workspace.account_signals_dev.recap_answers_current\n",
+          ")\n",
+          "SELECT date_trunc('WEEK', answered_at) AS week,\n",
+          "       count(score) AS questions_graded,\n",
+          "       round(avg(score), 1) AS avg_first_attempt_score\n",
+          "FROM first_attempt\n",
+          "WHERE rn = 1\n",
+          "GROUP BY 1\n",
+          "ORDER BY 1"
+        ]
+      },
+      {
+        "id": "20000000000000000000000000000004",
+        "question": ["Outstanding topic queue by account and origin"],
+        "sql": [
+          "SELECT account_id, origin, count(*) AS waiting, min(requested_at) AS oldest_request\n",
+          "FROM workspace.account_signals_dev.topic_queue_current\n",
+          "GROUP BY account_id, origin\n",
+          "ORDER BY account_id, origin"
+        ]
+      },
+      {
+        "id": "20000000000000000000000000000005",
+        "question": ["First versus latest score on questions that were retried"],
+        "sql": [
+          "WITH ranked AS (\n",
+          "  SELECT *,\n",
+          "    row_number() OVER (PARTITION BY briefing_id, rep_id, question_index ORDER BY answered_at) AS first_rn,\n",
+          "    row_number() OVER (PARTITION BY briefing_id, rep_id, question_index ORDER BY answered_at DESC) AS last_rn,\n",
+          "    count(*) OVER (PARTITION BY briefing_id, rep_id, question_index) AS attempts\n",
+          "  FROM workspace.account_signals_dev.recap_answers_current\n",
+          ")\n",
+          "SELECT account_id,\n",
+          "       count(DISTINCT briefing_id || ':' || rep_id || ':' || question_index) AS retried_questions,\n",
+          "       round(avg(CASE WHEN first_rn = 1 THEN score END), 1) AS avg_first_score,\n",
+          "       round(avg(CASE WHEN last_rn = 1 THEN score END), 1) AS avg_latest_score\n",
+          "FROM ranked\n",
+          "WHERE attempts > 1\n",
+          "GROUP BY account_id"
+        ]
+      }
+    ],
+    "text_instructions": [
+      {
+        "id": "30000000000000000000000000000001",
+        "content": [
+          "PURPOSE. This agent answers questions about how well sales reps understood their daily audio briefings: comprehension scores, what they missed, retries, and the queue of topics requested for future episodes. It does NOT answer questions about the accounts' financials (revenue, margins, growth, guidance, ratings). If asked one, say this agent covers rep comprehension only, and do not read numbers out of gold_briefing.script_text or any other text column.\n",
+          "\n",
+          "ACCOUNTS. account_id is a ticker: NVDA = NVIDIA, GOOG = Alphabet, MU = Micron. Map company names to these tickers when filtering.\n",
+          "\n",
+          "TABLES.\n",
+          "- recap_answers_current: the main table. One row per spoken answer to one of an episode's three comprehension questions (question_index). score is 0-100, graded by an LLM judge; verdict is one sentence said to the rep; missed is free text naming what they left out (empty string when nothing). score is NULL when grading failed: exclude NULLs from averages and report them as ungraded rather than as zero.\n",
+          "- gold_briefing: one row per generated episode. Join on briefing_id for episode_title, generated_at, and mode (A = earnings or filing episode, B = news episode, C = queued-topic episode on a quiet day; mode_label is the human-readable name). Use only these metadata columns; never aggregate or quote script_text, takeaways, metrics or lineage.\n",
+          "- gold_recall_grades: grades for free-form spoken recaps (accuracy 0-100, one row per recap). This input is not reachable from the current app UI, so the table is small and mostly historical; prefer recap_answers_current for comprehension questions and say so if you use this one. covered, gaps and wrong are JSON strings: parse gaps with from_json(gaps, 'array<struct<point:string,importance:string>>').\n",
+          "- topic_queue_current: topics still WAITING to become an episode (already-used topics are removed). origin is 'manual' (typed by the rep) or 'missed_question' (one click from an answer they got wrong). It has no history of used topics.\n",
+          "\n",
+          "RETRIES. A rep can answer the same question more than once, so there can be several rows per (briefing_id, rep_id, question_index). Unless the user asks about retries or latest attempts, measure comprehension on the FIRST attempt only: row_number() over (partition by briefing_id, rep_id, question_index order by answered_at) = 1. Counting every row double-counts retried questions and inflates scores.\n",
+          "\n",
+          "REPS. The app does not yet identify individual reps: rep_id is 'web-user' on essentially every row. Do not present per-rep rankings or comparisons; if asked, explain that rep identity is not captured yet.\n",
+          "\n",
+          "FRESHNESS. These tables are copied from the app's database by a job that runs weekdays at 20:00 America/New_York, so answers given today may not appear until that evening. Mention this when a user asks about 'today'.\n",
+          "\n",
+          "STYLE. Keep answers short. Round scores to one decimal. When listing weak spots, show the question and the missed text so a manager can see what was not understood. Data volumes are small: if the user asks for the top or bottom N and fewer rows exist, say how many were actually found rather than repeating N."
+        ]
+      }
+    ]
+  }
+}
