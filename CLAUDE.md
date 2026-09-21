@@ -89,6 +89,17 @@ aren't there:
   SQL against the UC-registered Lakebase project) instead of a driver.
   `src/app/app.py` uses `psycopg` directly because the app itself isn't
   serverless job compute.
+- **`FAILED_JDBC.CONNECTION` on `account_signals_pg` is usually Lakebase being
+  off, not credentials.** Federation hides the real cause. On 2026-09-21 it was
+  "The endpoint has been disabled": the `primary` endpoint had been disabled
+  (cause unknown) and the `production` branch then archived for inactivity.
+  Federated queries neither report that nor wake it. Check
+  `databricks postgres get-endpoint .../endpoints/primary` (`status.disabled`)
+  and `get-branch .../branches/production` (`current_state`), re-enable with
+  `update-endpoint ... spec.disabled --json '{"spec":{"disabled":false}}'`,
+  then open one direct `psycopg` connection to unarchive. The branch is now
+  `is_protected`, so it should no longer archive; a disabled endpoint can
+  still recur.
 - **`resources/app.yml` needs `postgres:`, not `database:`.** They look
   interchangeable but address different backends (`database:` = legacy
   Lakebase instance; `postgres:` = Lakebase Autoscaling, by branch path). The
