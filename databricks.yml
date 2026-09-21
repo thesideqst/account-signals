@@ -33,7 +33,7 @@ variables:
       Contact address sent in the User-Agent to SEC EDGAR. Their fair-access
       policy requires one; requests without it are throttled or blocked.
       Set this to your own address before running the ingest.
-    default: your-email@example.com
+    default: aliyareneekhan@gmail.com
   sync_pipeline_id:
     description: >-
       Pipeline behind the Lakebase synced table, created by
