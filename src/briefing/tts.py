@@ -96,6 +96,17 @@ def speak(text: str, key: str, speed: float = DEFAULT_SPEED, tries: int = 4) -> 
             raise RuntimeError(
                 f"TTS failed {e.code}: {e.read()[:200].decode('utf-8', 'replace')}"
             ) from e
+        # A stalled socket never becomes an HTTPError, so the retry above did
+        # not cover it: 2026-10-23's episode lost its audio to one read
+        # timeout. URLError is caught after HTTPError (its subclass) so this
+        # only sees connection-level failures.
+        except (TimeoutError, urllib.error.URLError) as e:
+            if attempt < tries - 1:
+                print(f"  TTS attempt {attempt + 1} failed "
+                      f"({type(e).__name__}); retrying")
+                time.sleep(5 * (attempt + 1))
+                continue
+            raise
 
 
 def main() -> None:

@@ -99,7 +99,11 @@ aren't there:
   `update-endpoint ... spec.disabled --json '{"spec":{"disabled":false}}'`,
   then open one direct `psycopg` connection to unarchive. The branch is now
   `is_protected`, so it should no longer archive; a disabled endpoint can
-  still recur.
+  still recur — and did: disabled again by 2026-10-06 (cause still unknown),
+  failing `narrate` after the MP3 was written and `sync_recaps` until it
+  came back on its own around 2026-10-21, then disabled again by 2026-10-26.
+  The job goes red, but the episode and audio still land, so the failure is
+  easy to miss.
 - **`resources/app.yml` needs `postgres:`, not `database:`.** They look
   interchangeable but address different backends (`database:` = legacy
   Lakebase instance; `postgres:` = Lakebase Autoscaling, by branch path). The

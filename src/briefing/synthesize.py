@@ -716,7 +716,28 @@ def main() -> None:
         pass
 
     # max() on the timestamp, and only non-empty text ever made it into the list.
-    callback = max(candidates)[1] if candidates else ""
+    callback = ""
+    if candidates:
+        gap_at, gap = max(candidates)
+        # A gap is replayed ONCE: in the first episode after it was recorded.
+        # Without this the newest gap is reused until the rep answers again,
+        # and since no one answered after 2026-09-02 every NVDA episode for
+        # seven weeks opened on the same Treasury-yields line. An episode
+        # generated after the gap means it has already been said.
+        last_episode_at = None
+        try:
+            last_episode_at = spark.sql(f"""
+                SELECT max(generated_at) AS t
+                FROM {catalog}.{schema}.gold_briefing
+                WHERE account_id = '{account}'
+            """).collect()[0]["t"]
+        except Exception:
+            pass  # no gold_briefing yet: nothing has replayed it
+        if last_episode_at is not None and last_episode_at > gap_at:
+            print(f"callback skipped: gap from {gap_at} already replayed by "
+                  f"the episode generated {last_episode_at}")
+        else:
+            callback = gap
     if callback:
         print(f"callback: {callback[:90]}")
 
@@ -840,11 +861,32 @@ def main() -> None:
     # retrieved separately and placed FIRST, ahead of the headlines. A headline
     # says what is being talked about; a filing says what actually happened,
     # in the company's own words.
+    #
+    # Two limits keep one filing from becoming every episode's subject. The
+    # window was 120 days and nothing capped chunks per document, so NVIDIA's
+    # 2026-09-02 Hugging Face 8-K filled 6 of 8 slots - placed first, at 900
+    # characters each - in every episode for seven weeks, half of them cover
+    # page, safe-harbor and signature text. Now: 21 days, at most two chunks
+    # per document, and boilerplate never takes a slot. Matched on phrases
+    # every 8-K carries; a chunk that matches is dropped rather than ranked,
+    # because the substantive chunks of the same filing are what is kept.
+    FILING_WINDOW_DAYS = 21
+    FILING_CHUNKS_PER_DOC = 2
+    boilerplate = ("(?i)form 8-k current report|emerging growth company"
+                   "|forward-looking statements|could cause actual results to differ"
+                   "|pursuant to the requirements of the securities exchange act"
+                   "|all rights reserved|for further information, contact")
     filing_rows = spark.sql(f"""
         SELECT publisher, headline, url, chunk_text, published_at, section
-        FROM {catalog}.{schema}.silver_doc_chunks
-        WHERE source_type = 'filing' AND account_id = '{account}'
-          AND published_at >= date_sub(current_date(), 120)
+        FROM (
+            SELECT *, row_number() OVER (
+                       PARTITION BY url ORDER BY char_count DESC) AS doc_rank
+            FROM {catalog}.{schema}.silver_doc_chunks
+            WHERE source_type = 'filing' AND account_id = '{account}'
+              AND published_at >= date_sub(current_date(), {FILING_WINDOW_DAYS})
+              AND NOT chunk_text RLIKE '{boilerplate}'
+        )
+        WHERE doc_rank <= {FILING_CHUNKS_PER_DOC}
         ORDER BY published_at DESC, char_count DESC
         LIMIT 8
     """).collect()
@@ -1120,7 +1162,8 @@ def main() -> None:
             for f in filing_rows if f["url"]
         ],
         "gold": {"mode": mode, "mode_reason": mode_reason,
-                 "prompt_chars": len(prompt), "model": endpoint},
+                 "prompt_chars": len(prompt), "model": endpoint,
+                 "callback": callback},
     }
 
     # Title and takeaways in one call, kept separate from the script. Folded
