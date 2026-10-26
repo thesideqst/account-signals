@@ -65,6 +65,15 @@ from pyspark.sql.window import Window
 # each vector about one thing.
 MAX_CHUNK_CHARS = 1500
 
+# Spoken names for the feed keys in src/ingest/trends.py FEEDS. A key missing
+# here falls back to the raw key rather than to NULL.
+TREND_PUBLISHERS = {
+    "mckinsey": "McKinsey",
+    "ieee_semis": "IEEE Spectrum",
+    "mit_tech_ai": "MIT Technology Review",
+    "semianalysis": "SemiAnalysis",
+}
+
 
 @dlt.table(
     comment="Chunked, embeddable text from all unstructured sources.",
@@ -199,6 +208,17 @@ def silver_doc_chunks():
             F.lit(0).alias("part_index"),
             F.lit(1).alias("sentence_count"),
             F.length(F.concat_ws(". ", F.col("title"), F.col("summary"))).alias("char_count"),
+            # Both were left to allowMissingColumns and so arrived NULL. The
+            # briefing labels every outside item "PUBLICATION: ... | HEADLINE:
+            # ...", and the prompt requires naming the source, so a NULL here
+            # reached the model as "unattributed" and the lineage as
+            # "None: None" - 5 of 14 trend items in one NVDA episode.
+            F.coalesce(
+                F.create_map(*[F.lit(x) for kv in TREND_PUBLISHERS.items()
+                               for x in kv])[F.col("source")],
+                F.col("source"),
+            ).alias("publisher"),
+            F.col("title").alias("headline"),
             F.lit(None).cast("struct<fiscal_year:int,fiscal_quarter:int>").alias("period"),
         )
     )

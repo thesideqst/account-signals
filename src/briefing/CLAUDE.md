@@ -55,9 +55,21 @@ and let the run finish and write to `gold_briefing` regardless. A green job
 run is not proof the script is clean — check the run's stdout for those
 strings, or read the script.
 
+The one exception is the **length guard**, which does retry: a draft under
+75% of the mode's `min_words` (`prompts.MODES`) gets one `EXPAND_PROMPT`
+follow-up, and the expansion is used only if `accept_expansion()` passes:
+it must be longer and add no ungrounded figure the draft didn't already have.
+Don't loosen that second condition. The first expansion ever run turned
+"219 basis points" into "$2.19 per sales dollar". Look for
+`LENGTH WARNING` / `expansion not used` in stdout. `prompts.LENGTH_RULE`
+restates the target at the end of the prompt, because stated only in the
+header it was ignored.
+
 ## Two extra model calls per episode, parsed by hand
 
-Beyond the script call (`temperature=0.4`, `max_tokens=4000`),
+Beyond the script call (`temperature=0.4`, `max_tokens=8000`, since gpt-oss
+reasoning tokens come out of the same budget; `finish_reason` and
+`completion_tokens` are logged),
 `synthesize.py` makes two more against the same endpoint: `EPISODE_META_PROMPT`
 (title + 3 takeaways, `temperature=0.6`, `max_tokens=1200`) and
 `QUESTIONS_PROMPT` (3 comprehension questions, `temperature=0.4`,

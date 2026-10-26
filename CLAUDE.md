@@ -126,7 +126,9 @@ aren't there:
 
 ## Tests
 
-`tests/README.md` names three pure-logic targets, but as of this writing
-`tests/` contains only that README — no test files exist yet, and no pytest
-config or run command exists anywhere in the repo. Verify before assuming a
-test command works as documented.
+Run with `python3 -m pytest tests` (no pytest config; no Databricks
+dependencies needed). The tests cover pure functions and load them out of
+modules like `synthesize.py` with `ast` rather than importing them, because
+those modules import the SDK at the top level. See `tests/test_grounding.py`
+for the pattern. `tests/README.md`'s three original targets are still
+untested; they're DLT tables with no seam (see `tests/CLAUDE.md`).
