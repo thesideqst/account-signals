@@ -538,10 +538,29 @@ conversation between two hosts, not a monologue.
 
 Write two things for the page a rep sees before they press play.
 
-TITLE - six to nine words, the way a podcast episode is titled. Name the actual tension or
-finding in THIS episode. Not "NVIDIA Q2 Update", which could title any episode; something
-you could only write after hearing this one. One clean phrase, no colon splitting it in
-two, no question, no clickbait. Never the words briefing, episode, update, or recap.
+TITLE - the question this episode answers, phrased the way a good news podcast or a
+headline would put it. A rep scrolling past episodes should know from the title alone what
+they would learn by pressing play. Most good titles open with "Why" or "What", or with
+"How", "Is" or "Can"; a plain headline that states the answer outright is fine too.
+
+Good, because each names a specific company, a specific tension, and why it matters:
+- Why is NVIDIA selling more chips but keeping less of each sale?
+- What a slower cloud quarter means for Microsoft's AI bet
+- Is Salesforce's growth slowing, or just changing shape?
+- Why Apple is still raising prices into a weaker market
+- How tariffs ended up on Ford's earnings call
+
+Bad, and why:
+- "NVIDIA Q2 Update" - could title any episode; says nothing happened.
+- "Margin Dynamics Amid Shifting Demand Landscape" - jargon, no company, no question.
+- "You Won't Believe What NVIDIA Just Did" - clickbait.
+- "NVIDIA: Revenue Up, Margins Down" - a colon splitting it into a label and a list.
+
+Rules: six to fourteen words. Plain words a non-specialist would understand - no acronyms
+beyond ticker-level ones everyone knows (AI, CEO, CFO), no finance jargon the rep would
+have to decode. Name the company or its product. It has to be something you could only
+write after hearing THIS episode, and it must not state a number or claim that is not in
+the script. No colon, no clickbait. Never the words briefing, episode, update, or recap.
 
 TAKEAWAYS - three lines. A rep with ninety seconds and no time to listen should still walk
 away with the point. Each line is one sentence, states something concrete, and includes the
