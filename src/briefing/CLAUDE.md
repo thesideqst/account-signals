@@ -83,7 +83,7 @@ fail the task.
 
 Per ARCHITECTURE.md, speech is off-platform — concretely, that means a plain
 `urllib` POST to `https://api.openai.com/v1/audio/speech`, model
-`gpt-4o-mini-tts`, voice `"ballad"`, both hardcoded module constants. Input is
+`gpt-4o-mini-tts`, voice `"marin"` (female), both hardcoded module constants. Input is
 capped at 4000 characters (the endpoint's hard limit is 4096); a script is
 split only on paragraph boundaries (`split_for_speech`), never mid-sentence,
 and the resulting MP3s are joined by raw byte concatenation — no ffmpeg, no

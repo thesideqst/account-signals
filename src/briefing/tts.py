@@ -23,7 +23,7 @@ import urllib.request
 
 SPEECH_URL = "https://api.openai.com/v1/audio/speech"
 MODEL = "gpt-4o-mini-tts"
-VOICE = "ballad"
+VOICE = "marin"                 # female; was "ballad" (male) until 2026-10-28
 # Measured against the browser's own reported duration, not a computed one:
 # at speed 1.0 this reads at roughly 153 words per minute, which is normal
 # narration pace. An earlier estimate of 264 wpm came from misreading the mp3
