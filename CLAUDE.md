@@ -50,6 +50,12 @@ aren't there:
   default. `databricks.yml` currently pins `workspace.profile: DEFAULT` on
   both the `dev` and `prod` targets — that's this workspace's profile name,
   not a convention; repoint it if yours differs.
+- **A dormant Free Edition workspace runs no schedules at all.** After a
+  quiet weekend the scheduler can stop firing for days (no
+  `jobs.runTriggered` in `system.access.audit`, no failed run either), until
+  someone logs in through the browser; CLI/API traffic doesn't wake it. A
+  missing day with no run in `databricks jobs list-runs` is this, not the
+  cron (SCOPE.md, 2026-10-28).
 - **`dev` runs on its cron like `prod`.** `mode: development` normally pauses
   schedules, but every job in `resources/*.job.yml` sets
   `schedule.pause_status: UNPAUSED` explicitly, overriding that default

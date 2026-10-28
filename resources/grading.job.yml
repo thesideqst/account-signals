@@ -49,6 +49,13 @@ resources:
 
       # 20:00 ET, weekdays. Runs after the working day so a rep's answers from
       # today are graded and their gaps are ready for tomorrow's cold open.
+      # A red run (Lakebase endpoint disabled, TTS out of credits) was easy to
+      # miss because the episode often lands anyway. A day the workspace sleeps
+      # through sends nothing: there is no run to fail.
+      email_notifications:
+        on_failure:
+          - ${workspace.current_user.userName}
+
       schedule:
         quartz_cron_expression: '0 0 20 ? * MON-FRI'
         timezone_id: America/New_York

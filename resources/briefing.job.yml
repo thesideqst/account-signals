@@ -87,6 +87,13 @@ resources:
       # 05:45 ET, weekdays: 45 minutes after ingest starts, which is comfortably
       # longer than the ~4 minutes a briefing takes plus the ingest itself. Late
       # enough that the data is in, early enough for a 6am commute.
+      # A red run (Lakebase endpoint disabled, TTS out of credits) was easy to
+      # miss because the episode often lands anyway. A day the workspace sleeps
+      # through sends nothing: there is no run to fail.
+      email_notifications:
+        on_failure:
+          - ${workspace.current_user.userName}
+
       schedule:
         quartz_cron_expression: '0 45 5 ? * MON-FRI'
         timezone_id: America/New_York
