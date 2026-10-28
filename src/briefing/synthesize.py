@@ -226,6 +226,34 @@ def figures(text: str) -> set:
     return vals
 
 
+def unsupported_figures(script: str, source: str) -> list:
+    """Figures in the script that appear nowhere in the source, within rounding.
+
+    The grounding guard's rule. Rounding to one decimal is tolerated - 1%, or
+    0.05 for small values - because the prompt asks for it.
+    """
+    given = figures(source)
+    return sorted(v for v in figures(script)
+                  if not any(abs(v - t) <= max(0.05, abs(v) * 0.01)
+                             for t in given))
+
+
+def accept_expansion(draft: str, expanded: str, source: str) -> bool:
+    """Whether a length expansion may replace the draft it was asked to extend.
+
+    Only if it is longer AND introduces no ungrounded figure the draft did not
+    already have. More room is more room to derive: the first expansion ever
+    run turned "gross margin expanded by 219 basis points" into "each sales
+    dollar left $2.19 more" - model arithmetic, and wrong by a factor of 100.
+    A shorter episode is a quality problem; an invented figure is the one
+    failure this project exists to prevent, so length never buys one.
+    """
+    if len(expanded.split()) <= len(draft.split()):
+        return False
+    had = set(unsupported_figures(draft, source))
+    return all(v in had for v in unsupported_figures(expanded, source))
+
+
 def extract_text(content) -> str:
     """Pull the spoken text out of a chat response.
 
@@ -418,7 +446,8 @@ def main() -> None:
     # Friday-evening filing is still the subject on Monday morning.
     MODE_WINDOW_DAYS = 2
     _sig = spark.sql(f"""
-        SELECT mode, signal_date FROM {catalog}.{schema}.silver_daily_signals
+        SELECT mode, mode_reason, signal_date
+        FROM {catalog}.{schema}.silver_daily_signals
         WHERE symbol = '{account}'
           AND signal_date >= date_sub(current_date(), {MODE_WINDOW_DAYS})
         -- A first, then the most recent day within the window. Ranked
@@ -639,22 +668,18 @@ def main() -> None:
              "of them as derived, computed, estimated, or inferred.\n"
     )
 
-    # Mode for the day this briefing covers. No row means nothing landed,
-    # which is itself the Mode C signal.
-    sig = spark.sql(f"""
-        SELECT mode, mode_reason, total_signals
-        FROM {catalog}.{schema}.silver_daily_signals
-        WHERE symbol = '{account}' AND signal_date = (
-            SELECT max(signal_date) FROM {catalog}.{schema}.silver_daily_signals
-            WHERE symbol = '{account}')
-    """).collect()
-    if sig:
-        # mode was already resolved above, including any forced override.
-        # Reassigning it here is what made "generate now" silently produce an
-        # ordinary Mode B episode: the force was applied and then thrown away.
-        mode_reason = sig[0]["mode_reason"] or "signals present"
+    # Why this mode, from the SAME row that chose it. This used to re-read the
+    # newest signal row on its own, so a Mode C episode chosen because nothing
+    # landed inside the window still reported that stale row's "6 news
+    # item(s)" - the provenance contradicted the mode it was explaining.
+    if _sig:
+        mode_reason = (f"{_sig[0]['mode_reason'] or 'signals present'} "
+                       f"on {_sig[0]['signal_date']}")
     else:
-        mode_reason = "no signals on record for this account"
+        mode_reason = (f"no signals in the last {MODE_WINDOW_DAYS} day(s); "
+                       f"{topic_source} subject: {requested_topic[:100]}")
+    if force_mode and not force_topic:
+        mode_reason = f"mode forced to {mode}; {mode_reason}"
     if force_topic:
         mode_reason = f"requested: {force_topic[:120]}"
     print(f"mode {mode} - {mode_reason}")
@@ -716,7 +741,28 @@ def main() -> None:
         pass
 
     # max() on the timestamp, and only non-empty text ever made it into the list.
-    callback = max(candidates)[1] if candidates else ""
+    callback = ""
+    if candidates:
+        gap_at, gap = max(candidates)
+        # A gap is replayed ONCE: in the first episode after it was recorded.
+        # Without this the newest gap is reused until the rep answers again,
+        # and since no one answered after 2026-09-02 every NVDA episode for
+        # seven weeks opened on the same Treasury-yields line. An episode
+        # generated after the gap means it has already been said.
+        last_episode_at = None
+        try:
+            last_episode_at = spark.sql(f"""
+                SELECT max(generated_at) AS t
+                FROM {catalog}.{schema}.gold_briefing
+                WHERE account_id = '{account}'
+            """).collect()[0]["t"]
+        except Exception:
+            pass  # no gold_briefing yet: nothing has replayed it
+        if last_episode_at is not None and last_episode_at > gap_at:
+            print(f"callback skipped: gap from {gap_at} already replayed by "
+                  f"the episode generated {last_episode_at}")
+        else:
+            callback = gap
     if callback:
         print(f"callback: {callback[:90]}")
 
@@ -840,11 +886,32 @@ def main() -> None:
     # retrieved separately and placed FIRST, ahead of the headlines. A headline
     # says what is being talked about; a filing says what actually happened,
     # in the company's own words.
+    #
+    # Two limits keep one filing from becoming every episode's subject. The
+    # window was 120 days and nothing capped chunks per document, so NVIDIA's
+    # 2026-09-02 Hugging Face 8-K filled 6 of 8 slots - placed first, at 900
+    # characters each - in every episode for seven weeks, half of them cover
+    # page, safe-harbor and signature text. Now: 21 days, at most two chunks
+    # per document, and boilerplate never takes a slot. Matched on phrases
+    # every 8-K carries; a chunk that matches is dropped rather than ranked,
+    # because the substantive chunks of the same filing are what is kept.
+    FILING_WINDOW_DAYS = 21
+    FILING_CHUNKS_PER_DOC = 2
+    boilerplate = ("(?i)form 8-k current report|emerging growth company"
+                   "|forward-looking statements|could cause actual results to differ"
+                   "|pursuant to the requirements of the securities exchange act"
+                   "|all rights reserved|for further information, contact")
     filing_rows = spark.sql(f"""
         SELECT publisher, headline, url, chunk_text, published_at, section
-        FROM {catalog}.{schema}.silver_doc_chunks
-        WHERE source_type = 'filing' AND account_id = '{account}'
-          AND published_at >= date_sub(current_date(), 120)
+        FROM (
+            SELECT *, row_number() OVER (
+                       PARTITION BY url ORDER BY char_count DESC) AS doc_rank
+            FROM {catalog}.{schema}.silver_doc_chunks
+            WHERE source_type = 'filing' AND account_id = '{account}'
+              AND published_at >= date_sub(current_date(), {FILING_WINDOW_DAYS})
+              AND NOT chunk_text RLIKE '{boilerplate}'
+        )
+        WHERE doc_rank <= {FILING_CHUNKS_PER_DOC}
         ORDER BY published_at DESC, char_count DESC
         LIMIT 8
     """).collect()
@@ -897,11 +964,10 @@ def main() -> None:
         # The SDK wants typed ChatMessage objects; plain dicts fail with
         # "'dict' object has no attribute 'as_dict'".
         messages=[ChatMessage(role=ChatMessageRole.USER, content=prompt)],
-        # Raised from 4000: the response is now a JSON array of turns, and
-        # the per-turn {"speaker": ..., "text": ...} structure and quoting
-        # costs tokens the target word count (still 1,400-2,200 words,
-        # unchanged by the dialogue format) does not account for.
-        max_tokens=5000,
+        # Raised from 4000 for the JSON turn structure, then from 5000: gpt-oss
+        # spends reasoning tokens out of the same budget, so 5000 left about
+        # as much room as a 1,800-word conversation needs and no slack.
+        max_tokens=8000,
         temperature=0.4,
     )
     # gpt-oss models return content as a list of parts (reasoning plus text)
@@ -910,6 +976,12 @@ def main() -> None:
     raw_text = extract_text(raw)
     if not raw_text.strip():
         raise RuntimeError(f"empty script; raw content type {type(raw)}: {str(raw)[:300]}")
+    # Logged so a short episode can be told apart from a truncated one: a
+    # finish_reason of "length" means the budget ran out, "stop" means the
+    # model chose to end there.
+    usage = getattr(resp, "usage", None)
+    print(f"generation: finish_reason={resp.choices[0].finish_reason} "
+          f"completion_tokens={getattr(usage, 'completion_tokens', None)}")
 
     # The model now writes a two-host conversation instead of a monologue
     # (prompts.DIALOGUE_RULES), so the primary generation call returns a JSON
@@ -931,6 +1003,53 @@ def main() -> None:
             print("  WARNING could not parse turns (no valid host_a/host_b "
                   "turns in the response)")
         turns = [{"speaker": "host_a", "text": raw_text.strip()}]
+
+    # LENGTH GUARD. Every episode from 2026-10-06 to 2026-10-26 came back at
+    # 366-809 words against a 1,400-1,800 target, ending cleanly - the model
+    # chose to stop, it was not cut off. Same reasoning as the format and
+    # grounding guards: check rather than trust. Below the floor, ONE
+    # follow-up asks for the whole conversation at length from the same
+    # material; it replaces the draft only if it parses, is longer, and adds
+    # no ungrounded figure (accept_expansion), so a bad expansion can never
+    # make the episode worse than it was.
+    spec = prompts.MODES[mode]
+    got = len(concat_turns(turns).split())
+    floor = int(spec["min_words"] * 0.75)
+    if got < floor:
+        print(f"LENGTH WARNING - {got} words, below the {floor}-word floor; "
+              f"asking for one expansion")
+        try:
+            more = w.serving_endpoints.query(
+                name=endpoint,
+                messages=[
+                    ChatMessage(role=ChatMessageRole.USER, content=prompt),
+                    ChatMessage(role=ChatMessageRole.ASSISTANT, content=raw_text),
+                    ChatMessage(role=ChatMessageRole.USER,
+                                content=prompts.EXPAND_PROMPT.format(
+                                    got=got, words=spec["words"],
+                                    turns=spec["turns"])),
+                ],
+                max_tokens=8000,
+                temperature=0.4,
+            )
+            more_turns, more_err = parse_turns(
+                extract_text(more.choices[0].message.content))
+            more_got = len(concat_turns(more_turns).split())
+            print(f"  expansion: {more_got} words, finish_reason="
+                  f"{more.choices[0].finish_reason}"
+                  + (f", parse error {more_err}" if more_err else ""))
+            if more_turns and accept_expansion(
+                    concat_turns(turns), concat_turns(more_turns), prompt):
+                turns = more_turns
+            else:
+                new = sorted(set(unsupported_figures(concat_turns(more_turns), prompt))
+                             - set(unsupported_figures(concat_turns(turns), prompt)))
+                print("  expansion not used; keeping the original draft"
+                      + (f" - it added ungrounded figure(s): "
+                         + ", ".join(f"{v:g}" for v in new[:8]) if new else ""))
+        except Exception as e:
+            print(f"  expansion failed ({type(e).__name__}); keeping the "
+                  f"original draft")
     host_a_n = sum(1 for t in turns if t["speaker"] == "host_a")
     host_b_n = sum(1 for t in turns if t["speaker"] == "host_b")
     print(f"turns: {len(turns)} ({host_a_n} host_a, {host_b_n} host_b)")
@@ -984,10 +1103,7 @@ def main() -> None:
     # Rounding is expected: the prompt asks for one decimal place, so 74.98 may
     # legitimately be spoken as 75. Outside 1% - or 0.05 for small values - the
     # number was not handed over.
-    supplied = figures(prompt)
-    unsupported = sorted(
-        v for v in figures(script)
-        if not any(abs(v - t) <= max(0.05, abs(v) * 0.01) for t in supplied))
+    unsupported = unsupported_figures(script, prompt)
     if unsupported:
         print(f"GROUNDING WARNING - {len(unsupported)} figure(s) appear in no "
               f"supplied source: "
@@ -1120,7 +1236,8 @@ def main() -> None:
             for f in filing_rows if f["url"]
         ],
         "gold": {"mode": mode, "mode_reason": mode_reason,
-                 "prompt_chars": len(prompt), "model": endpoint},
+                 "prompt_chars": len(prompt), "model": endpoint,
+                 "callback": callback},
     }
 
     # Title and takeaways in one call, kept separate from the script. Folded

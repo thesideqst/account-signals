@@ -306,12 +306,29 @@ survive, because the rep will repeat it to a customer."""
 
 MODES = {
     "A": {"name": "HIGH-SIGNAL", "core_minutes": "5 to 8", "core": MODE_A_CORE,
-          "words": "1,400 to 1,800"},
+          "words": "1,400 to 1,800", "min_words": 1400, "turns": "45 to 60"},
     "B": {"name": "TARGETED-SIGNAL", "core_minutes": "5 to 8", "core": MODE_B_CORE,
-          "words": "1,400 to 1,800"},
+          "words": "1,400 to 1,800", "min_words": 1400, "turns": "45 to 60"},
     "C": {"name": "DEEP-DIVE", "core_minutes": "7 to 10", "core": MODE_C_CORE,
-          "words": "1,800 to 2,200"},
+          "words": "1,800 to 2,200", "min_words": 1800, "turns": "55 to 70"},
 }
+
+# Restated at the very END of the prompt. Stated only in the header, the target
+# sat 40,000+ characters above a run of brevity rules (CAP THE FILLER, keep
+# turns short, say so in one sentence) and episodes came back at 400-550 words
+# against 1,400-1,800. Turns are given alongside words because the reply is a
+# JSON array of turns, which is the unit the model is actually counting.
+LENGTH_RULE = """LENGTH. Target {words} words in total - roughly {turns} short turns. A
+short episode is not a tighter one: the rep blocked ten minutes for this. Reach the length by
+going deeper into the material you were given - the mechanism behind each figure, what
+management said and why, how the macro reading touches this account, what the rep should ask
+- never by adding a fact you were not given and never by filler turns."""
+
+EXPAND_PROMPT = """Your draft is {got} words. The target is {words} words - roughly {turns}
+turns. Rewrite it as one complete conversation at that length. Keep every rule from the
+original instructions: the same four phases, the same grounding (no fact, figure or claim that
+is not in the material you were given), the same voice rules. Add depth from that material,
+not filler. Reply with the complete JSON array of turns only, nothing before or after it."""
 
 HEADER = """You are the executive producer and scriptwriter for account_signals, a daily
 audio briefing for an enterprise account executive who covers {account}. They will hear
@@ -500,8 +517,10 @@ def build(mode: str, account: str, deltas: str, framing: str, context: str = "",
         VOICE_RULES,
         # Last, deliberately: the reply-format instruction (JSON, not prose)
         # is the most load-bearing rule in the whole prompt and belongs where
-        # the model reads it right before answering.
+        # the model reads it right before answering. Only the short length
+        # reminder follows it, for the same recency reason (see LENGTH_RULE).
         DIALOGUE_RULES,
+        LENGTH_RULE.format(words=m["words"], turns=m["turns"]),
     ]
     return "\n\n".join(p for p in parts if p and p.strip())
 

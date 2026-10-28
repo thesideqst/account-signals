@@ -37,6 +37,13 @@ anything. The selection logic worth knowing before touching either file:
 - **Callback**: only the single highest-importance gap from the latest
   `gold_recall_grades` row is passed to the cold open, not the full gap list
   — handing over the whole JSON array produced a scolding, eight-item open.
+  The newest gap (from either source) is replayed only if no episode for the
+  account has been generated since it was recorded — i.e. once. It's logged
+  as `lineage.gold.callback`.
+- **Filings** (8-K chunks, placed ahead of headlines): last 21 days only, at
+  most two chunks per document (`url`), boilerplate (cover page, safe harbor,
+  signature, IR contacts) excluded by phrase match. Widening any of these lets
+  one filing become every episode's subject again.
 
 ## The format guard only warns — it never blocks or retries
 
@@ -48,9 +55,21 @@ and let the run finish and write to `gold_briefing` regardless. A green job
 run is not proof the script is clean — check the run's stdout for those
 strings, or read the script.
 
+The one exception is the **length guard**, which does retry: a draft under
+75% of the mode's `min_words` (`prompts.MODES`) gets one `EXPAND_PROMPT`
+follow-up, and the expansion is used only if `accept_expansion()` passes:
+it must be longer and add no ungrounded figure the draft didn't already have.
+Don't loosen that second condition. The first expansion ever run turned
+"219 basis points" into "$2.19 per sales dollar". Look for
+`LENGTH WARNING` / `expansion not used` in stdout. `prompts.LENGTH_RULE`
+restates the target at the end of the prompt, because stated only in the
+header it was ignored.
+
 ## Two extra model calls per episode, parsed by hand
 
-Beyond the script call (`temperature=0.4`, `max_tokens=4000`),
+Beyond the script call (`temperature=0.4`, `max_tokens=8000`, since gpt-oss
+reasoning tokens come out of the same budget; `finish_reason` and
+`completion_tokens` are logged),
 `synthesize.py` makes two more against the same endpoint: `EPISODE_META_PROMPT`
 (title + 3 takeaways, `temperature=0.6`, `max_tokens=1200`) and
 `QUESTIONS_PROMPT` (3 comprehension questions, `temperature=0.4`,
@@ -69,8 +88,9 @@ capped at 4000 characters (the endpoint's hard limit is 4096); a script is
 split only on paragraph boundaries (`split_for_speech`), never mid-sentence,
 and the resulting MP3s are joined by raw byte concatenation — no ffmpeg, no
 crossfade, no re-encode, which is deliberate for serverless. Retries on HTTP
-429/500/502/503 up to 4 tries with `5 * attempt` second backoff; any other
-HTTP error raises immediately with the response body in the message.
+429/500/502/503 and on connection-level failures (`TimeoutError`, `URLError`)
+up to 4 tries with `5 * attempt` second backoff; any other HTTP error raises
+immediately with the response body in the message.
 
 ## Gotchas verified in code
 

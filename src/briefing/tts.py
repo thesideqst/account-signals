@@ -90,12 +90,30 @@ def speak(text: str, key: str, speed: float = DEFAULT_SPEED, tries: int = 4) -> 
             with urllib.request.urlopen(req, timeout=180) as r:
                 return r.read()
         except urllib.error.HTTPError as e:
+            detail = e.read()[:400].decode("utf-8", "replace")
+            # OpenAI returns 429 for an EMPTY ACCOUNT as well as for a rate
+            # limit. Waiting does not refill credits, so that one fails at once
+            # and says what to do, rather than backing off three times first.
+            if e.code == 429 and "insufficient_quota" in detail:
+                raise RuntimeError(
+                    "TTS failed: the OpenAI account has no credits left "
+                    "(insufficient_quota). Add credits, then re-run narrate."
+                ) from e
             if e.code in (429, 500, 502, 503) and attempt < tries - 1:
                 time.sleep(5 * (attempt + 1))
                 continue
-            raise RuntimeError(
-                f"TTS failed {e.code}: {e.read()[:200].decode('utf-8', 'replace')}"
-            ) from e
+            raise RuntimeError(f"TTS failed {e.code}: {detail[:200]}") from e
+        # A stalled socket never becomes an HTTPError, so the retry above did
+        # not cover it: 2026-10-23's episode lost its audio to one read
+        # timeout. URLError is caught after HTTPError (its subclass) so this
+        # only sees connection-level failures.
+        except (TimeoutError, urllib.error.URLError) as e:
+            if attempt < tries - 1:
+                print(f"  TTS attempt {attempt + 1} failed "
+                      f"({type(e).__name__}); retrying")
+                time.sleep(5 * (attempt + 1))
+                continue
+            raise
 
 
 def main() -> None:
